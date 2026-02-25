@@ -1,0 +1,123 @@
+{
+  "stories": [
+    {
+      "id": "QUANT-001",
+      "description": "Project Scaffolding and Async Pytest Configuration",
+      "acceptanceCriteria": [
+        "Create pyproject.toml with runtime dependencies (ccxt>=4.0, aiohttp>=3.9, aiolimiter>=1.1, pandas>=2.1, numpy>=1.26, rich>=13.0, python-dotenv>=1.0) and [project.optional-dependencies] dev (pytest>=8.0, pytest-asyncio>=0.23, pytest-mock>=3.12). Include [tool.setuptools.packages.find] where = ['src']",
+        "Create project directory structure: src/quant_scanner/ with __init__.py and __main__.py, tests/ with conftest.py, cache/ directory (empty, git-ignored)",
+        "Create pytest.ini with exactly: [pytest]\\nasyncio_mode = auto\\ntestpaths = tests",
+        "Do NOT duplicate pytest config in pyproject.toml — pytest.ini is the single source of pytest configuration",
+        "Create .gitignore excluding cache/, .env, __pycache__, *.pyc, .venv/, *.egg-info/, dist/, build/",
+        "Create .env.example with COINGECKO_API_KEY=your_key_here",
+        "Create a dummy async test in tests/test_scaffold.py: 'async def test_async_works(): assert True' to verify pytest-asyncio auto mode works",
+        "Create virtual environment: python -m venv .venv",
+        "CRITICAL: Install the project in editable mode with dev deps: pip install -e '.[dev]' — this is required for all subsequent pytest imports to work with the src/ layout",
+        "Verify the package is importable: python -c 'import quant_scanner; print(quant_scanner)'"
+      ],
+      "gateCmd": "cd /f/TradingScanner && .venv/Scripts/python -m pytest tests/ -v",
+      "passed": false
+    },
+    {
+      "id": "QUANT-002",
+      "description": "Build Ingestion Engine: CoinGecko Universe Fetching & Caching",
+      "acceptanceCriteria": [
+        "Implement fetch_universe() in src/quant_scanner/ingestion_engine.py using aiohttp to hit CoinGecko /coins/markets (4 pages x 250 = top 1000 coins)",
+        "At module level, call load_dotenv() from python-dotenv so COINGECKO_API_KEY is loaded from .env if present. If the key exists, pass it as x-cg-demo-api-key header; if not, fall back to public tier",
+        "Configure Python logging at module level: logger = logging.getLogger(__name__). Use logger.warning() for skipped coins and logger.info() for cache hits/misses",
+        "Implement local disk caching to cache/coingecko_universe.json with fetched_at ISO timestamp; cache valid for 12 hours. Use os.makedirs('cache', exist_ok=True) BEFORE writing cache files to auto-create the directory",
+        "Filter: skip coins where market_cap is None/null FIRST, then filter out coins with market_cap < $20M or market_cap > $150M. The null guard prevents TypeError on comparison",
+        "Filter out coins whose symbol (uppercased) is in STABLECOINS or WRAPPED_TOKENS frozensets",
+        "Define STABLECOINS and WRAPPED_TOKENS as module-level frozenset constants with at least: USDT, USDC, DAI, BUSD, TUSD, FRAX, USDP, GUSD for stables; WBTC, WETH, WBNB, STETH, WSTETH for wrapped",
+        "Implement rate limiting for CoinGecko using aiolimiter.AsyncLimiter(25, 60)",
+        "Implement exponential backoff with jitter on 429/5xx responses (max 5 retries): delay = 2**attempt + random.uniform(0, 1)",
+        "All tests use mocked HTTP responses via unittest.mock.AsyncMock — ZERO network calls in tests",
+        "Tests must include: test_market_cap_filter (verifies coins outside range are dropped AND coins with null market_cap are dropped), test_stablecoin_exclusion (verifies USDT removed), test_wrapped_token_exclusion (verifies WBTC removed), test_cache_saves_and_loads (verifies JSON file written and read back correctly using tmp_path fixture)"
+      ],
+      "gateCmd": "cd /f/TradingScanner && .venv/Scripts/python -m pytest tests/test_ingestion.py::test_market_cap_filter tests/test_ingestion.py::test_stablecoin_exclusion tests/test_ingestion.py::test_wrapped_token_exclusion tests/test_ingestion.py::test_cache_saves_and_loads -v",
+      "passed": false
+    },
+    {
+      "id": "QUANT-003",
+      "description": "Build Ingestion Engine: CCXT OHLCV Fetching, Symbol Mapping & Timestamp Alignment",
+      "acceptanceCriteria": [
+        "Implement map_coingecko_to_ccxt() that: uppercases CoinGecko symbol, appends /USDT, verifies pair exists in exchange.markets, deduplicates (when 2 CG coins map to same pair, keep higher market_cap_rank i.e. lower rank number). Log dropped/deduplicated coins via logger.warning()",
+        "Implement fetch_historical_data() using ccxt.async_support with enableRateLimit=True",
+        "Use asyncio.Semaphore(10) to cap concurrent OHLCV fetches",
+        "Always fetch BTC/USDT as the first symbol (the baseline for Beta/Correlation calculations)",
+        "Compute 'since' timestamp using datetime.now(timezone.utc) — NOT datetime.now() which gives local time on Windows",
+        "Convert raw OHLCV lists to pandas DataFrames with DatetimeIndex (pd.to_datetime(timestamps, unit='ms', utc=True)) and columns: open, high, low, close, volume",
+        "Reindex all altcoin DataFrames to BTC's DatetimeIndex; forward-fill NaN gaps with limit=3",
+        "Implement OHLCV disk caching to cache/ohlcv/{SYMBOL}.json with fetched_at; cache valid for 6 hours. Use os.makedirs('cache/ohlcv', exist_ok=True) before writes",
+        "Handle ccxt.BadSymbol by logging a warning and skipping the symbol",
+        "Handle empty OHLCV responses (None or empty list) by logging a warning and skipping the symbol",
+        "CRITICAL: Always call await exchange.close() in a try/finally block when done fetching, to prevent ResourceWarning: unclosed client session",
+        "All tests use AsyncMock for exchange methods (load_markets, fetch_ohlcv, close) — ZERO network calls",
+        "Tests must include: test_ohlcv_dataframe_format (correct columns and DatetimeIndex), test_timestamp_alignment (altcoin reindexed to BTC index with forward-fill verified), test_symbol_mapping (correct CG to CCXT conversion), test_symbol_deduplication (higher MC rank wins when 2 CG coins map to same pair), test_exchange_close_called (verify exchange.close was awaited)"
+      ],
+      "gateCmd": "cd /f/TradingScanner && .venv/Scripts/python -m pytest tests/test_ingestion.py::test_ohlcv_dataframe_format tests/test_ingestion.py::test_timestamp_alignment tests/test_ingestion.py::test_symbol_mapping tests/test_ingestion.py::test_symbol_deduplication tests/test_ingestion.py::test_exchange_close_called -v",
+      "passed": false
+    },
+    {
+      "id": "QUANT-004",
+      "description": "Build Math Engine: Beta, Correlation, and Kelly Criterion",
+      "acceptanceCriteria": [
+        "Implement calculate_beta(asset_returns, btc_returns, window=30, min_periods=20) in src/quant_scanner/math_engine.py using rolling().cov() / rolling().var() with var.replace(0, np.nan) guard against division by zero",
+        "Implement calculate_correlation(asset_returns, btc_returns, window=30, min_periods=20) using rolling().corr()",
+        "Implement calculate_kelly(returns, max_fraction=0.25, min_trades=30) using half-Kelly: f = min((b*p-q)/(2*b), max_fraction) where b=avg_win/avg_loss, p=win_rate, q=1-p. Guard: if no wins or no losses in the series, return 0.0",
+        "Implement compute_all_metrics(ohlcv_data: dict[str, DataFrame]) that computes daily returns via pct_change(), calculates Beta/Correlation/Kelly for each altcoin vs BTC, and returns the LAST valid (non-NaN) value of each rolling series. Also returns data_days = count of non-NaN values in the returns series (not the close prices — this is len(close)-1 minus NaN count)",
+        "Test: feed asset_returns = exactly 2 * btc_returns for 60 days using np.random.seed(42) → assert Beta == 2.0 within np.isclose tolerance (atol=1e-10)",
+        "Test: feed asset_returns = exactly -1 * btc_returns for 60 days → assert Correlation == -1.0 within np.isclose tolerance (atol=1e-10)",
+        "Test: feed asset_returns = exactly 2 * btc_returns → assert Correlation == 1.0 within np.isclose tolerance",
+        "Test: feed btc_returns = all zeros (flat BTC, zero variance) → assert Beta is NaN (not inf, not error)",
+        "Test: feed only 15 data points with window=30 and min_periods=20 → assert all Beta and Correlation values are NaN",
+        "Test: feed returns with 60% win rate and avg_win/avg_loss = 1.5 → assert 0 < Kelly <= 0.25",
+        "Test: feed returns with 30% win rate and avg_win/avg_loss = 0.8 → assert Kelly == 0.0 (no edge)",
+        "Test: feed returns with 90% win rate → assert Kelly <= max_fraction (0.25 cap enforced)",
+        "Test: feed returns with ALL positive values (no losses) → assert Kelly == 0.0 (insufficient data to estimate loss)"
+      ],
+      "gateCmd": "cd /f/TradingScanner && .venv/Scripts/python -m pytest tests/test_math.py -v",
+      "passed": false
+    },
+    {
+      "id": "QUANT-005",
+      "description": "Build Screener Engine: Filter Pipeline & Ranking",
+      "acceptanceCriteria": [
+        "Implement run_screen() in src/quant_scanner/screener_engine.py that orchestrates: fetch_universe → map_coingecko_to_ccxt → fetch_historical_data → compute_all_metrics → merge_metadata → apply_filters",
+        "Implement merge_metadata() that joins CoinGecko metadata (name, market_cap, volume_24h, circulating_supply, total_supply) with math engine output (beta, correlation, kelly_fraction, data_days) on symbol. Compute circulating_pct = circulating_supply / total_supply; if EITHER field is null/zero, set circulating_pct = NaN (not crash)",
+        "Implement apply_filters() that filters in this order: data_days >= 20, Beta > min_beta (default 1.5), Correlation > min_correlation (default 0.7), volume_24h > min_volume (default $1M), circulating_pct > min_supply_pct (default 0.70) ONLY if circulating_pct is not NaN",
+        "Sort final results by Beta descending",
+        "Return DataFrame with columns: symbol, name, market_cap, volume_24h, beta, correlation, kelly_fraction, circulating_pct, data_days",
+        "Tests mock the ingestion and math engines entirely — provide pre-built DataFrames with known values, ZERO network calls",
+        "Test: coin with Beta=1.2 (below 1.5 threshold) is excluded from results",
+        "Test: coin with Correlation=0.5 (below 0.7 threshold) is excluded from results",
+        "Test: coin with Volume=$500k (below $1M threshold) is excluded from results",
+        "Test: coin with data_days=15 (below 20 minimum) is excluded from results",
+        "Test: coin with NaN circulating_pct is NOT excluded (supply check is skipped when data unavailable)",
+        "Test: coin where total_supply=0 results in NaN circulating_pct, NOT ZeroDivisionError",
+        "Test: output DataFrame is sorted by Beta descending (highest Beta first)"
+      ],
+      "gateCmd": "cd /f/TradingScanner && .venv/Scripts/python -m pytest tests/test_screener.py -v",
+      "passed": false
+    },
+    {
+      "id": "QUANT-006",
+      "description": "Build CLI Dashboard with --dry-run Support",
+      "acceptanceCriteria": [
+        "Implement render_results() in src/quant_scanner/dashboard.py using rich.table.Table with columns: Rank, Symbol, Name, Market Cap, 24h Volume, Beta, Correlation, Kelly %, Circ. Supply %",
+        "Color coding rules: Beta > 2.0 → bold green, Beta 1.5-2.0 → yellow; Correlation > 0.85 → bold green, 0.7-0.85 → yellow; Kelly > 0.15 → bold green, Kelly > 0 → yellow, Kelly == 0 → dim",
+        "Implement render_no_results() that prints a styled panel message when no coins pass the screen",
+        "Implement cli.py with argparse flags: --dry-run (action=store_true), --exchange (default='binance'), --min-mcap (default=20000000), --max-mcap (default=150000000), --min-beta (default=1.5), --min-corr (default=0.7), --min-volume (default=1000000), --no-cache (action=store_true)",
+        "cli.main() is a sync function. For --dry-run: build mock DataFrame synchronously, call render_results(), and return (NO asyncio.run needed). For live mode: call asyncio.run(async_main(args)) which invokes run_screen()",
+        "Implement __main__.py with exactly: from quant_scanner.cli import main; main() — this enables 'python -m quant_scanner'",
+        "--dry-run MUST bypass ALL network calls and render a hardcoded mock DataFrame with at least 3 example coins showing varied Beta/Correlation/Kelly values",
+        "Configure logging.basicConfig(level=logging.INFO) at the top of cli.main() so all logger.warning/info calls from other modules are visible",
+        "Test in tests/test_cli.py: parse_args(['--dry-run']) sets args.dry_run to True",
+        "Test in tests/test_cli.py: parse_args([]) returns correct default values for all arguments",
+        "The command 'python -m quant_scanner --dry-run' must produce a visible formatted table in the terminal and exit with code 0"
+      ],
+      "gateCmd": "cd /f/TradingScanner && .venv/Scripts/python -m quant_scanner --dry-run",
+      "passed": false
+    }
+  ]
+}

@@ -1,2 +1,0 @@
-# CryptoScanner
-Scan fpr crypto
