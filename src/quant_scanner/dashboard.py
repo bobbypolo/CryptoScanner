@@ -33,6 +33,7 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
     table.add_column("Beta", justify="right")
     table.add_column("Correlation", justify="right")
     table.add_column("Kelly %", justify="right")
+    table.add_column("Amihud", justify="right")
     table.add_column("Circ. Supply %", justify="right")
 
     for rank, (_, row) in enumerate(results.iterrows(), start=1):
@@ -71,6 +72,15 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
         else:
             kelly_style = "dim"
 
+        # Format Amihud illiquidity with color
+        amihud_val = row.get("amihud")
+        if pd.isna(amihud_val) or amihud_val is None:
+            amihud_str = "N/A"
+            amihud_style = ""
+        else:
+            amihud_str = f"{amihud_val:.1e}"
+            amihud_style = "yellow" if amihud_val > 1e-7 else ""
+
         # Format circulating supply percentage
         circ_val = row["circulating_pct"]
         if pd.isna(circ_val) or (isinstance(circ_val, float) and math.isnan(circ_val)):
@@ -87,6 +97,7 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
             f"[{beta_style}]{beta_str}[/{beta_style}]" if beta_style else beta_str,
             f"[{corr_style}]{corr_str}[/{corr_style}]" if corr_style else corr_str,
             f"[{kelly_style}]{kelly_str}[/{kelly_style}]" if kelly_style else kelly_str,
+            f"[{amihud_style}]{amihud_str}[/{amihud_style}]" if amihud_style else amihud_str,
             circ_str,
         )
 

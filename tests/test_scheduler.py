@@ -30,6 +30,7 @@ def _make_scan_df(n: int = 3) -> pd.DataFrame:
             "beta": [2.0 + i * 0.1 for i in range(n)],
             "correlation": [0.85 + i * 0.01 for i in range(n)],
             "kelly_fraction": [0.12 + i * 0.01 for i in range(n)],
+            "amihud": [1e-8 + i * 1e-9 for i in range(n)],
             "circulating_pct": [0.75 + i * 0.05 for i in range(n)],
             "data_days": [59] * n,
         }

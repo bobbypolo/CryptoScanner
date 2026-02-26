@@ -32,6 +32,7 @@ _OUTPUT_COLUMNS = [
     "beta",
     "correlation",
     "kelly_fraction",
+    "amihud",
     "circulating_pct",
     "data_days",
 ]
@@ -167,6 +168,7 @@ def merge_metadata(
                 "beta": row["beta"],
                 "correlation": row["correlation"],
                 "kelly_fraction": row["kelly_fraction"],
+                "amihud": row.get("amihud", np.nan),
                 "circulating_pct": meta.get("circulating_pct", np.nan),
                 "data_days": row["data_days"],
             }
@@ -184,6 +186,7 @@ def apply_filters(
     min_correlation: float = 0.7,
     min_volume: float = 1_000_000,
     min_supply_pct: float = 0.70,
+    max_amihud: float = 5e-7,
 ) -> pd.DataFrame:
     """Apply the screening filters in order and sort by beta descending.
 
@@ -193,6 +196,8 @@ def apply_filters(
         3. correlation > min_correlation
         4. volume_24h > min_volume
         5. circulating_pct > min_supply_pct ONLY where not NaN
+           (NaN rows PASS this filter)
+        6. amihud <= max_amihud ONLY where not NaN
            (NaN rows PASS this filter)
 
     Returns
@@ -224,6 +229,11 @@ def apply_filters(
     )
     result = result[supply_mask]
 
+    # 6. amihud <= max_amihud ONLY where not NaN
+    #    NaN rows pass this filter (same pattern as circulating_pct)
+    amihud_mask = result["amihud"].isna() | (result["amihud"] <= max_amihud)
+    result = result[amihud_mask]
+
     # Sort by beta descending
     result = result.sort_values("beta", ascending=False).reset_index(drop=True)
 
@@ -238,6 +248,7 @@ async def run_screen(
     min_correlation: float = 0.7,
     min_volume: float = 1_000_000,
     min_supply_pct: float = 0.70,
+    max_amihud: float = 5e-7,
     days: int = 60,
     use_cache: bool = True,
 ) -> pd.DataFrame:
@@ -350,6 +361,7 @@ async def run_screen(
         min_correlation=min_correlation,
         min_volume=min_volume,
         min_supply_pct=min_supply_pct,
+        max_amihud=max_amihud,
     )
 
     logger.info(

@@ -33,6 +33,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 2.5,
             "correlation": 0.9,
             "kelly_fraction": 0.15,
+            "amihud": 1e-8,
             "circulating_pct": 0.80,
             "data_days": 55,
         },
@@ -44,6 +45,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 1.8,
             "correlation": 0.75,
             "kelly_fraction": 0.10,
+            "amihud": 2e-8,
             "circulating_pct": 0.85,
             "data_days": 50,
         },
@@ -56,6 +58,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 2.0,
             "correlation": 0.80,
             "kelly_fraction": 0.08,
+            "amihud": 5e-8,
             "circulating_pct": float("nan"),
             "data_days": 45,
         },
@@ -68,6 +71,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 1.2,
             "correlation": 0.85,
             "kelly_fraction": 0.12,
+            "amihud": 3e-8,
             "circulating_pct": 0.75,
             "data_days": 40,
         },
@@ -80,6 +84,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 2.0,
             "correlation": 0.5,
             "kelly_fraction": 0.11,
+            "amihud": 4e-8,
             "circulating_pct": 0.90,
             "data_days": 50,
         },
@@ -92,6 +97,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 1.9,
             "correlation": 0.88,
             "kelly_fraction": 0.09,
+            "amihud": 6e-8,
             "circulating_pct": 0.72,
             "data_days": 55,
         },
@@ -104,6 +110,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 2.1,
             "correlation": 0.82,
             "kelly_fraction": 0.07,
+            "amihud": 7e-8,
             "circulating_pct": 0.88,
             "data_days": 15,
         },
@@ -116,6 +123,7 @@ _TEST_DF = pd.DataFrame(
             "beta": 1.7,
             "correlation": 0.78,
             "kelly_fraction": 0.06,
+            "amihud": 8e-8,
             "circulating_pct": float("nan"),
             "data_days": 40,
         },
@@ -192,6 +200,21 @@ class TestApplyFilters:
         result = apply_filters(_TEST_DF.copy(), min_beta=100.0)
         assert result.empty
 
+    def test_high_amihud_excluded(self) -> None:
+        """Coin with Amihud above threshold is excluded."""
+        df = _TEST_DF.copy()
+        # Set ALPHA's amihud above default threshold (5e-7)
+        df.loc[df["symbol"] == "ALPHA/USDT", "amihud"] = 1e-6
+        result = apply_filters(df)
+        assert "ALPHA/USDT" not in result["symbol"].values
+
+    def test_nan_amihud_not_excluded(self) -> None:
+        """Coin with NaN Amihud must NOT be excluded (fail-open)."""
+        df = _TEST_DF.copy()
+        df.loc[df["symbol"] == "ALPHA/USDT", "amihud"] = float("nan")
+        result = apply_filters(df)
+        assert "ALPHA/USDT" in result["symbol"].values
+
     def test_output_columns(self) -> None:
         """Result must have exactly the expected output columns."""
         result = _filtered()
@@ -203,6 +226,7 @@ class TestApplyFilters:
             "beta",
             "correlation",
             "kelly_fraction",
+            "amihud",
             "circulating_pct",
             "data_days",
         ]
@@ -237,6 +261,7 @@ class TestMergeMetadata:
                     "beta": 1.7,
                     "correlation": 0.78,
                     "kelly_fraction": 0.06,
+                    "amihud": 1e-8,
                     "data_days": 40,
                 },
             ]
@@ -268,6 +293,7 @@ class TestMergeMetadata:
                     "beta": 1.9,
                     "correlation": 0.81,
                     "kelly_fraction": 0.10,
+                    "amihud": 1e-8,
                     "data_days": 50,
                 },
             ]
@@ -295,6 +321,7 @@ class TestMergeMetadata:
                     "beta": 2.1,
                     "correlation": 0.85,
                     "kelly_fraction": 0.12,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
             ]
@@ -322,6 +349,7 @@ class TestMergeMetadata:
                     "beta": 2.5,
                     "correlation": 0.9,
                     "kelly_fraction": 0.15,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
             ]
@@ -349,6 +377,7 @@ class TestMergeMetadata:
                     "beta": 1.8,
                     "correlation": 0.75,
                     "kelly_fraction": 0.10,
+                    "amihud": 1e-8,
                     "data_days": 50,
                 },
             ]
@@ -385,6 +414,7 @@ class TestMergeMetadata:
                     "beta": 2.5,
                     "correlation": 0.9,
                     "kelly_fraction": 0.15,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
                 {
@@ -392,6 +422,7 @@ class TestMergeMetadata:
                     "beta": 1.8,
                     "correlation": 0.75,
                     "kelly_fraction": 0.10,
+                    "amihud": 1e-8,
                     "data_days": 50,
                 },
             ]
@@ -415,7 +446,7 @@ class TestMergeMetadata:
             },
         ]
         metrics = pd.DataFrame(
-            columns=["symbol", "beta", "correlation", "kelly_fraction", "data_days"]
+            columns=["symbol", "beta", "correlation", "kelly_fraction", "amihud", "data_days"]
         )
         result = merge_metadata(coins, metrics)
         assert result.empty
@@ -481,6 +512,7 @@ class TestRunScreen:
                     "beta": 2.5,
                     "correlation": 0.9,
                     "kelly_fraction": 0.15,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
                 {
@@ -488,6 +520,7 @@ class TestRunScreen:
                     "beta": 1.8,
                     "correlation": 0.75,
                     "kelly_fraction": 0.10,
+                    "amihud": 2e-8,
                     "data_days": 50,
                 },
             ]

@@ -10,6 +10,7 @@
             <th>Beta</th>
             <th>Correlation</th>
             <th>Kelly %</th>
+            <th>Amihud</th>
             <th>Circ. %</th>
         </tr>
     </thead>
@@ -29,6 +30,9 @@
             </td>
             <td class="{% if row.get('kelly_fraction', row.get('kelly_pct')) is not none and row.get('kelly_fraction', row.get('kelly_pct')) > 0.15 %}kelly-high{% elif row.get('kelly_fraction', row.get('kelly_pct')) is not none and row.get('kelly_fraction', row.get('kelly_pct')) > 0 %}kelly-mid{% else %}kelly-zero{% endif %}">
                 {{ row.get('kelly_fraction', row.get('kelly_pct')) | format_pct }}
+            </td>
+            <td class="{% if row.get('amihud') is not none and row.get('amihud') > 1e-7 %}amihud-warn{% else %}amihud-ok{% endif %}">
+                {{ row.get('amihud') | format_amihud }}
             </td>
             <td>{{ row.get('circulating_pct') | format_pct }}</td>
         </tr>

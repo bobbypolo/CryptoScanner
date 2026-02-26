@@ -110,12 +110,24 @@ def format_beta(value) -> str:
     return f"{v:.2f}"
 
 
+def format_amihud(value) -> str:
+    """Format Amihud ratio: 1.2e-8 -> '1.2e-08', None/NaN -> 'N/A'."""
+    if value is None or _is_nan(value):
+        return "N/A"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{v:.1e}"
+
+
 # Register filters on the Jinja2 environment
 if templates is not None:
     templates.env.filters["format_mcap"] = format_mcap
     templates.env.filters["format_volume"] = format_volume
     templates.env.filters["format_pct"] = format_pct
     templates.env.filters["format_beta"] = format_beta
+    templates.env.filters["format_amihud"] = format_amihud
 
 
 # ---------------------------------------------------------------------------

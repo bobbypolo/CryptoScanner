@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from quant_scanner.math_engine import (
+    calculate_amihud,
     calculate_beta,
     calculate_correlation,
     calculate_kelly,
@@ -151,6 +152,50 @@ class TestKelly:
 
 
 # ---------------------------------------------------------------------------
+# Amihud tests
+# ---------------------------------------------------------------------------
+
+
+class TestAmihud:
+    """Verify Amihud illiquidity ratio calculation."""
+
+    def test_basic_calc(self) -> None:
+        """Basic Amihud: mean(|return| / dollar_volume)."""
+        np.random.seed(42)
+        close = pd.Series(np.linspace(10, 12, 60))
+        volume = pd.Series(np.full(60, 1_000_000.0))
+        returns = close.pct_change()
+        result = calculate_amihud(returns, volume, close)
+        assert isinstance(result, float)
+        assert result > 0
+        assert not np.isnan(result)
+
+    def test_zero_volume_nan(self) -> None:
+        """Zero-volume candles produce NaN (not inf)."""
+        close = pd.Series(np.linspace(10, 12, 60))
+        volume = pd.Series(np.zeros(60))  # all zero volume
+        returns = close.pct_change()
+        result = calculate_amihud(returns, volume, close)
+        assert np.isnan(result)
+
+    def test_insufficient_data_nan(self) -> None:
+        """Fewer than min_periods observations returns NaN."""
+        close = pd.Series([10.0, 11.0, 12.0])
+        volume = pd.Series([1e6, 1e6, 1e6])
+        returns = close.pct_change()
+        result = calculate_amihud(returns, volume, close, window=30, min_periods=20)
+        assert np.isnan(result)
+
+    def test_zero_returns_zero(self) -> None:
+        """Constant close prices (zero returns) produce 0."""
+        close = pd.Series(np.full(60, 10.0))
+        volume = pd.Series(np.full(60, 1_000_000.0))
+        returns = close.pct_change()
+        result = calculate_amihud(returns, volume, close)
+        assert result == 0.0
+
+
+# ---------------------------------------------------------------------------
 # compute_all_metrics tests
 # ---------------------------------------------------------------------------
 
@@ -165,10 +210,11 @@ class TestComputeAllMetrics:
         btc_close = 100 + np.cumsum(np.random.randn(60) * 2)
         # Altcoin that amplifies BTC moves: correlated price series
         alt_close = 50 + np.cumsum(np.random.randn(60) * 3)
+        alt_volume = np.full(60, 1_000_000.0)
 
         ohlcv_data = {
             "BTC/USDT": pd.DataFrame({"close": btc_close}),
-            "ALT/USDT": pd.DataFrame({"close": alt_close}),
+            "ALT/USDT": pd.DataFrame({"close": alt_close, "volume": alt_volume}),
         }
 
         result = compute_all_metrics(ohlcv_data)
@@ -178,8 +224,11 @@ class TestComputeAllMetrics:
         assert result.iloc[0]["symbol"] == "ALT/USDT"
 
         # Verify all expected columns
-        for col in ["symbol", "beta", "correlation", "kelly_fraction", "data_days"]:
+        for col in ["symbol", "beta", "correlation", "kelly_fraction", "amihud", "data_days"]:
             assert col in result.columns, f"Missing column: {col}"
+
+        # Amihud should be a valid number
+        assert not np.isnan(result.iloc[0]["amihud"])
 
         # data_days should be count of non-NaN returns (59 max from 60 closes)
         assert result.iloc[0]["data_days"] == 59

@@ -86,6 +86,32 @@ def calculate_kelly(
     return min(f_half, max_fraction) if f_star > 0 else 0.0
 
 
+def calculate_amihud(
+    returns: pd.Series,
+    volume: pd.Series,
+    close: pd.Series,
+    window: int = 30,
+    min_periods: int = 20,
+) -> float:
+    """Amihud illiquidity ratio: mean(|return| / dollar_volume).
+
+    Higher values indicate less liquid markets. Uses a trailing window
+    of daily observations.
+
+    Guards:
+        - Zero-volume candles produce NaN (not inf).
+        - If fewer than min_periods valid observations, returns NaN.
+    """
+    dollar_volume = volume * close
+    dollar_volume = dollar_volume.replace(0, np.nan)
+    ratio = returns.abs() / dollar_volume
+
+    rolling_mean = ratio.rolling(window, min_periods=min_periods).mean()
+    if rolling_mean.dropna().empty:
+        return np.nan
+    return float(rolling_mean.dropna().iloc[-1])
+
+
 def compute_all_metrics(
     ohlcv_data: dict[str, pd.DataFrame],
 ) -> pd.DataFrame:
@@ -137,12 +163,19 @@ def compute_all_metrics(
         # Kelly fraction on the asset returns
         kelly_val = calculate_kelly(asset_returns)
 
+        # Amihud illiquidity ratio (requires volume column)
+        if "volume" in df.columns:
+            amihud_val = calculate_amihud(asset_returns, df["volume"], df["close"])
+        else:
+            amihud_val = np.nan
+
         results.append(
             {
                 "symbol": symbol,
                 "beta": beta_val,
                 "correlation": corr_val,
                 "kelly_fraction": kelly_val,
+                "amihud": amihud_val,
                 "data_days": data_days,
             }
         )
