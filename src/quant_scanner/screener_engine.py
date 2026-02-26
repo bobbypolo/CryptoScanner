@@ -37,6 +37,69 @@ _OUTPUT_COLUMNS = [
 ]
 
 
+def price_sanity_filter(
+    coins: list[dict],
+    ohlcv_data: dict[str, pd.DataFrame],
+    max_divergence: float = 0.15,
+) -> tuple[list[dict], dict[str, pd.DataFrame]]:
+    """Drop coins where CoinGecko price diverges >15% from OHLCV last close.
+
+    Called BEFORE compute_all_metrics to avoid wasting CPU on garbage data.
+    Returns filtered (coins, ohlcv_data) with divergent symbols removed from both.
+    BTC/USDT is always preserved in ohlcv_data (it's the baseline).
+    """
+    # Build lookup: CG symbol (lowercase) → current_price
+    cg_prices: dict[str, float | None] = {}
+    for coin in coins:
+        raw_sym = coin.get("symbol", "")
+        ccxt_symbol = raw_sym.upper() + "/USDT"
+        cg_prices[ccxt_symbol] = coin.get("current_price")
+
+    # Identify symbols to drop
+    symbols_to_drop: set[str] = set()
+    for symbol, df in ohlcv_data.items():
+        if symbol == "BTC/USDT":
+            continue
+
+        cg_price = cg_prices.get(symbol)
+
+        # Fail-open: if CG price is None/0 or OHLCV is empty, keep the coin
+        if cg_price is None or cg_price == 0:
+            continue
+        if df.empty or "close" not in df.columns:
+            continue
+
+        last_close = df["close"].iloc[-1]
+        if last_close is None or last_close == 0:
+            continue
+
+        try:
+            divergence = abs(cg_price - last_close) / cg_price
+        except (TypeError, ZeroDivisionError):
+            continue
+
+        if divergence > max_divergence:
+            logger.warning(
+                "Price sanity check failed for %s: CG=%.4f, OHLCV=%.4f, divergence=%.1f%% — dropping",
+                symbol, cg_price, last_close, divergence * 100,
+            )
+            symbols_to_drop.add(symbol)
+
+    if not symbols_to_drop:
+        return coins, ohlcv_data
+
+    # Filter ohlcv_data
+    filtered_ohlcv = {k: v for k, v in ohlcv_data.items() if k not in symbols_to_drop}
+
+    # Filter coins list: remove coins whose CCXT symbol was dropped
+    dropped_cg_symbols = {s.split("/")[0].lower() for s in symbols_to_drop}
+    filtered_coins = [
+        c for c in coins if c.get("symbol", "").lower() not in dropped_cg_symbols
+    ]
+
+    return filtered_coins, filtered_ohlcv
+
+
 def merge_metadata(
     coins: list[dict],
     metrics: pd.DataFrame,
@@ -261,6 +324,13 @@ async def run_screen(
 
     if not ohlcv_data:
         logger.warning("No OHLCV data returned")
+        return pd.DataFrame(columns=_OUTPUT_COLUMNS)
+
+    # Step 4.5: Price sanity filter — drop symbol collisions BEFORE math
+    coins, ohlcv_data = price_sanity_filter(coins, ohlcv_data)
+
+    if len(ohlcv_data) <= 1:  # only BTC/USDT left
+        logger.warning("All coins dropped by price sanity filter")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
     # Step 5: Compute all metrics (Beta, Correlation, Kelly)

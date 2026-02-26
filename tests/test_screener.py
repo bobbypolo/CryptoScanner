@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quant_scanner.screener_engine import apply_filters, merge_metadata, run_screen
+from quant_scanner.screener_engine import (
+    apply_filters,
+    merge_metadata,
+    price_sanity_filter,
+    run_screen,
+)
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -436,6 +441,7 @@ class TestRunScreen:
                 "circulating_supply": 80_000_000,
                 "total_supply": 100_000_000,
                 "market_cap_rank": 100,
+                "current_price": 3.0,
             },
             {
                 "symbol": "bravo",
@@ -445,6 +451,7 @@ class TestRunScreen:
                 "circulating_supply": 85_000_000,
                 "total_supply": 100_000_000,
                 "market_cap_rank": 120,
+                "current_price": 0.8,
             },
         ]
 
@@ -589,3 +596,90 @@ class TestRunScreen:
             result = await run_screen()
 
         assert result.empty
+
+
+# ---------------------------------------------------------------------------
+# price_sanity_filter tests
+# ---------------------------------------------------------------------------
+
+
+class TestPriceSanityFilter:
+    """Tests for the price_sanity_filter() function."""
+
+    def _make_coins(self, symbol: str, current_price):
+        return [{"symbol": symbol, "name": symbol.upper(), "current_price": current_price}]
+
+    def _make_ohlcv(self, symbol: str, last_close: float):
+        ccxt_sym = symbol.upper() + "/USDT"
+        btc_df = pd.DataFrame({"close": [40000.0, 41000.0, 42000.0]})
+        alt_df = pd.DataFrame({"close": [last_close - 0.1, last_close - 0.05, last_close]})
+        return {"BTC/USDT": btc_df, ccxt_sym: alt_df}
+
+    def test_matching_price_kept(self) -> None:
+        """Coin with matching CG and OHLCV price is kept."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 1.0)
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+        assert len(filtered_coins) == 1
+
+    def test_divergent_price_dropped(self) -> None:
+        """Coin with >15% divergence is dropped from both coins and ohlcv."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 2.0)  # 100% divergence
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" not in filtered_ohlcv
+        assert len(filtered_coins) == 0
+
+    def test_boundary_14pct_kept(self) -> None:
+        """14% divergence is within 15% threshold — coin kept."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 0.86)  # 14% divergence
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+
+    def test_boundary_17pct_dropped(self) -> None:
+        """17% divergence exceeds 15% threshold — coin dropped."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 0.83)  # 17% divergence
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" not in filtered_ohlcv
+
+    def test_none_price_kept(self) -> None:
+        """Coin with current_price=None is kept (fail-open)."""
+        coins = self._make_coins("alpha", None)
+        ohlcv = self._make_ohlcv("alpha", 999.0)
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+        assert len(filtered_coins) == 1
+
+    def test_empty_ohlcv_kept(self) -> None:
+        """Coin with empty OHLCV DataFrame is kept (fail-open)."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = {"BTC/USDT": pd.DataFrame({"close": [40000.0]}), "ALPHA/USDT": pd.DataFrame()}
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+
+    def test_zero_price_kept(self) -> None:
+        """Coin with current_price=0 is kept (fail-open)."""
+        coins = self._make_coins("alpha", 0)
+        ohlcv = self._make_ohlcv("alpha", 5.0)
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+
+    def test_coins_list_also_filtered(self) -> None:
+        """When a symbol is dropped, the coins list is also filtered."""
+        coins = [
+            {"symbol": "alpha", "name": "Alpha", "current_price": 1.0},
+            {"symbol": "bravo", "name": "Bravo", "current_price": 5.0},
+        ]
+        btc_df = pd.DataFrame({"close": [40000.0, 41000.0]})
+        alpha_df = pd.DataFrame({"close": [1.0, 1.02]})  # close to CG
+        bravo_df = pd.DataFrame({"close": [50.0, 50.5]})  # 10x divergence
+        ohlcv = {"BTC/USDT": btc_df, "ALPHA/USDT": alpha_df, "BRAVO/USDT": bravo_df}
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert len(filtered_coins) == 1
+        assert filtered_coins[0]["symbol"] == "alpha"
+        assert "ALPHA/USDT" in filtered_ohlcv
+        assert "BRAVO/USDT" not in filtered_ohlcv
+        assert "BTC/USDT" in filtered_ohlcv  # BTC always preserved
