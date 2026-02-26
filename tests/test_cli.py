@@ -9,7 +9,7 @@ def test_dry_run_flag():
 def test_default_args():
     args = parse_args([])
     assert args.dry_run is False
-    assert args.exchange == "binance"
+    assert args.exchange == "kucoin,okx,gate"
     assert args.min_mcap == 20_000_000
     assert args.max_mcap == 150_000_000
     assert args.min_beta == 1.5

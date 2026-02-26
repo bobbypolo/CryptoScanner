@@ -150,12 +150,12 @@ async def lifespan(app: FastAPI):
     scan_kw = _server_config.get("scan_kwargs", {})
     logger.info(
         "Dashboard started: host=%s, port=%s, refresh_interval=%ds, "
-        "exchange=%s, min_mcap=%s, max_mcap=%s, min_beta=%s, "
+        "exchanges=%s, min_mcap=%s, max_mcap=%s, min_beta=%s, "
         "min_correlation=%s, min_volume=%s, use_cache=%s",
         _server_config.get("host", "127.0.0.1"),
         _server_config.get("port", 8080),
         _server_config["interval_seconds"],
-        scan_kw.get("exchange_id", "binance"),
+        scan_kw.get("exchange_id", "kucoin,okx,gate"),
         scan_kw.get("min_mcap", 20_000_000),
         scan_kw.get("max_mcap", 150_000_000),
         scan_kw.get("min_beta", 1.5),

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -390,6 +391,221 @@ def align_to_btc_index(
 # ---------------------------------------------------------------------------
 # OHLCV fetching (CCXT async)
 # ---------------------------------------------------------------------------
+
+
+def map_coingecko_to_ccxt_multi(
+    coins: list[dict],
+    exchanges: list[tuple[str, object]],
+) -> dict[str, str]:
+    """Map CoinGecko coin dicts to CCXT symbols across multiple exchanges.
+
+    For each coin, tries to find its ``SYMBOL/USDT`` pair on any exchange
+    (preference order follows the *exchanges* list). Excludes BTC/USDT
+    (baseline, fetched separately). Deduplicates by ``market_cap_rank``
+    the same way as :func:`map_coingecko_to_ccxt`.
+
+    Parameters
+    ----------
+    coins : list[dict]
+        CoinGecko coin dicts with at least ``symbol``, ``id``, ``market_cap_rank``.
+    exchanges : list[tuple[str, object]]
+        Ordered list of ``(exchange_id, exchange_instance)`` tuples.  The
+        exchange instances must already have ``markets`` loaded.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of CCXT symbol (e.g. ``"SNEK/USDT"``) to the exchange_id
+        that will serve it (e.g. ``"kucoin"``).  First exchange in the list
+        wins when a symbol exists on multiple exchanges.
+    """
+    # best_coin tracks the CG coin dict with the lowest rank per symbol
+    best_coin: dict[str, dict] = {}
+    # symbol_exchange tracks which exchange owns each symbol
+    symbol_exchange: dict[str, str] = {}
+
+    for coin in coins:
+        raw_symbol = coin.get("symbol", "")
+        candidate = raw_symbol.upper() + "/USDT"
+
+        # Exclude BTC/USDT — it's the baseline, fetched separately
+        if candidate == "BTC/USDT":
+            continue
+
+        # Find the first exchange that has this symbol
+        matched_exchange_id: str | None = None
+        for ex_id, ex_inst in exchanges:
+            if candidate in ex_inst.markets:
+                matched_exchange_id = ex_id
+                break
+
+        if matched_exchange_id is None:
+            logger.warning(
+                "Dropping %s (%s): %s not found on any exchange",
+                coin.get("id"), raw_symbol, candidate,
+            )
+            continue
+
+        # Deduplicate: keep the coin with the lowest market_cap_rank
+        rank = coin.get("market_cap_rank")
+        if rank is None:
+            rank = float("inf")
+
+        if candidate in best_coin:
+            existing_rank = best_coin[candidate].get("market_cap_rank")
+            if existing_rank is None:
+                existing_rank = float("inf")
+            if rank < existing_rank:
+                logger.warning(
+                    "Deduplicating %s: keeping %s (rank %s) over %s (rank %s)",
+                    candidate,
+                    coin.get("id"), rank,
+                    best_coin[candidate].get("id"), existing_rank,
+                )
+                best_coin[candidate] = coin
+                symbol_exchange[candidate] = matched_exchange_id
+            else:
+                logger.warning(
+                    "Deduplicating %s: keeping %s (rank %s), dropping %s (rank %s)",
+                    candidate,
+                    best_coin[candidate].get("id"), existing_rank,
+                    coin.get("id"), rank,
+                )
+        else:
+            best_coin[candidate] = coin
+            symbol_exchange[candidate] = matched_exchange_id
+
+    # Log per-exchange counts
+    counts = Counter(symbol_exchange.values())
+    for ex_id, count in counts.items():
+        logger.info("Mapped %d symbols to %s", count, ex_id)
+    logger.info("Total symbols mapped across all exchanges: %d", len(symbol_exchange))
+
+    return symbol_exchange
+
+
+async def fetch_historical_data_multi(
+    symbol_exchange_map: dict[str, str],
+    days: int = 60,
+    use_cache: bool = True,
+) -> dict[str, pd.DataFrame]:
+    """Fetch daily OHLCV data for symbols spread across multiple exchanges.
+
+    Groups symbols by exchange, opens one connection per exchange, fetches
+    all symbols for that exchange (with per-exchange ``asyncio.Semaphore(10)``),
+    then merges and aligns everything to BTC's DatetimeIndex.
+
+    BTC/USDT is fetched from the first exchange in the map's value set.
+
+    Parameters
+    ----------
+    symbol_exchange_map : dict[str, str]
+        Mapping of CCXT symbol to exchange_id, as returned by
+        :func:`map_coingecko_to_ccxt_multi`.
+    days : int
+        Number of days of historical data.
+    use_cache : bool
+        Whether to use OHLCV disk cache.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Same format as :func:`fetch_historical_data`: symbol to DataFrame.
+        ``"BTC/USDT"`` always included. Altcoins aligned to BTC index.
+    """
+    # Group symbols by exchange
+    exchange_symbols: dict[str, list[str]] = defaultdict(list)
+    for symbol, ex_id in symbol_exchange_map.items():
+        exchange_symbols[ex_id].append(symbol)
+
+    # Determine which exchange fetches BTC/USDT (first available)
+    all_exchange_ids = list(dict.fromkeys(symbol_exchange_map.values()))
+    if not all_exchange_ids:
+        logger.warning("No exchanges available for fetching — returning empty result")
+        return {}
+    btc_exchange_id = all_exchange_ids[0]
+
+    # Ensure BTC/USDT is fetched from the first exchange only
+    for ex_id in exchange_symbols:
+        if "BTC/USDT" in exchange_symbols[ex_id]:
+            exchange_symbols[ex_id].remove("BTC/USDT")
+    exchange_symbols[btc_exchange_id].insert(0, "BTC/USDT")
+
+    since = int(
+        (datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000
+    )
+
+    raw_dfs: dict[str, pd.DataFrame] = {}
+
+    for ex_id, symbols in exchange_symbols.items():
+        sem = asyncio.Semaphore(10)
+        exchange = getattr(ccxt_async, ex_id)({"enableRateLimit": True})
+
+        try:
+            await exchange.load_markets()
+
+            async def _fetch_one(
+                symbol: str,
+                _exchange=exchange,
+                _sem=sem,
+            ) -> tuple[str, list[list] | None]:
+                """Fetch OHLCV for a single symbol, respecting semaphore."""
+                if use_cache:
+                    cached = _load_ohlcv_cache(symbol)
+                    if cached is not None:
+                        return (symbol, cached)
+
+                async with _sem:
+                    try:
+                        ohlcv = await _exchange.fetch_ohlcv(
+                            symbol, "1d", since=since, limit=days,
+                        )
+                    except ccxt_async.BadSymbol:
+                        logger.warning("BadSymbol for %s on %s, skipping", symbol, ex_id)
+                        return (symbol, None)
+
+                if not ohlcv:
+                    logger.warning(
+                        "Empty OHLCV response for %s on %s, skipping", symbol, ex_id,
+                    )
+                    return (symbol, None)
+
+                if use_cache:
+                    _save_ohlcv_cache(symbol, ohlcv)
+
+                return (symbol, ohlcv)
+
+            tasks = [_fetch_one(s) for s in symbols]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        finally:
+            await exchange.close()
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("Fetch exception on %s: %s", ex_id, result)
+                continue
+            symbol, ohlcv = result
+            if ohlcv is None:
+                continue
+            raw_dfs[symbol] = ohlcv_to_dataframe(ohlcv)
+
+    # BTC must be present for alignment
+    if "BTC/USDT" not in raw_dfs:
+        logger.warning("BTC/USDT data missing — returning empty result")
+        return {}
+
+    btc_df = raw_dfs["BTC/USDT"]
+
+    # Separate altcoin DataFrames for alignment
+    alt_dfs = {s: df for s, df in raw_dfs.items() if s != "BTC/USDT"}
+    aligned = align_to_btc_index(btc_df, alt_dfs)
+
+    # Build final output: BTC + aligned altcoins
+    output: dict[str, pd.DataFrame] = {"BTC/USDT": btc_df}
+    output.update(aligned)
+
+    return output
 
 
 async def fetch_historical_data(

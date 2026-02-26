@@ -486,7 +486,13 @@ class TestRunScreen:
             ]
         )
 
-        # Mock the exchange for map_coingecko_to_ccxt inside run_screen
+        # Mock symbol→exchange mapping for multi-exchange path
+        mock_symbol_exchange_map = {
+            "ALPHA/USDT": "kucoin",
+            "BRAVO/USDT": "kucoin",
+        }
+
+        # Mock exchange instances for load_markets in run_screen
         mock_exchange_inst = AsyncMock()
         mock_exchange_inst.markets = {
             "ALPHA/USDT": {},
@@ -494,10 +500,11 @@ class TestRunScreen:
             "BTC/USDT": {},
         }
 
-        # Patch ccxt_async so getattr(ccxt_async, "binance")({...})
-        # returns our mock exchange instance
+        # Patch ccxt_async so getattr(ccxt_async, exchange_id)({...})
+        # returns our mock exchange instance for any exchange
         mock_ccxt_module = AsyncMock()
-        mock_ccxt_module.binance = lambda opts: mock_exchange_inst
+        for eid in ("kucoin", "okx", "gate", "binance"):
+            setattr(mock_ccxt_module, eid, lambda opts, _m=mock_exchange_inst: _m)
 
         with (
             patch(
@@ -506,11 +513,11 @@ class TestRunScreen:
                 return_value=mock_coins,
             ),
             patch(
-                "quant_scanner.screener_engine.map_coingecko_to_ccxt",
-                return_value=mock_symbols,
+                "quant_scanner.screener_engine.map_coingecko_to_ccxt_multi",
+                return_value=mock_symbol_exchange_map,
             ),
             patch(
-                "quant_scanner.screener_engine.fetch_historical_data",
+                "quant_scanner.screener_engine.fetch_historical_data_multi",
                 new_callable=AsyncMock,
                 return_value=mock_ohlcv,
             ),
@@ -561,7 +568,8 @@ class TestRunScreen:
         mock_exchange_inst.markets = {}
 
         mock_ccxt_module = AsyncMock()
-        mock_ccxt_module.binance = lambda opts: mock_exchange_inst
+        for eid in ("kucoin", "okx", "gate", "binance"):
+            setattr(mock_ccxt_module, eid, lambda opts, _m=mock_exchange_inst: _m)
 
         with (
             patch(
@@ -570,8 +578,8 @@ class TestRunScreen:
                 return_value=mock_coins,
             ),
             patch(
-                "quant_scanner.screener_engine.map_coingecko_to_ccxt",
-                return_value=[],
+                "quant_scanner.screener_engine.map_coingecko_to_ccxt_multi",
+                return_value={},
             ),
             patch(
                 "quant_scanner.screener_engine.ccxt_async",

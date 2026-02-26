@@ -14,8 +14,10 @@ import pandas as pd
 
 from quant_scanner.ingestion_engine import (
     fetch_historical_data,
+    fetch_historical_data_multi,
     fetch_universe,
     map_coingecko_to_ccxt,
+    map_coingecko_to_ccxt_multi,
 )
 from quant_scanner.math_engine import compute_all_metrics
 
@@ -166,7 +168,7 @@ def apply_filters(
 
 
 async def run_screen(
-    exchange_id: str = "binance",
+    exchange_id: str = "kucoin,okx,gate",
     min_mcap: float = 20_000_000,
     max_mcap: float = 150_000_000,
     min_beta: float = 1.5,
@@ -176,15 +178,21 @@ async def run_screen(
     days: int = 60,
     use_cache: bool = True,
 ) -> pd.DataFrame:
-    """End-to-end screening pipeline.
+    """End-to-end screening pipeline with multi-exchange support.
+
+    Accepts a comma-separated string of exchange IDs.  When multiple
+    exchanges are specified, symbols are mapped across all of them and
+    OHLCV data is fetched from the exchange that owns each symbol.
+    Single-exchange usage (e.g. ``exchange_id="kucoin"``) still works.
 
     Orchestrates:
         1. fetch_universe() -- CoinGecko filtered coin list
-        2. map_coingecko_to_ccxt() -- symbol validation against exchange
-        3. fetch_historical_data() -- 60-day OHLCV + BTC baseline
-        4. compute_all_metrics() -- Beta, Correlation, Kelly per coin
-        5. merge_metadata() -- join CG metadata with math output
-        6. apply_filters() -- final sieve + sort by Beta descending
+        2. Load markets from all exchanges (skip failures with warning)
+        3. map_coingecko_to_ccxt_multi() -- symbol validation across exchanges
+        4. fetch_historical_data_multi() -- 60-day OHLCV + BTC baseline
+        5. compute_all_metrics() -- Beta, Correlation, Kelly per coin
+        6. merge_metadata() -- join CG metadata with math output
+        7. apply_filters() -- final sieve + sort by Beta descending
 
     Returns
     -------
@@ -194,6 +202,9 @@ async def run_screen(
         circulating_pct, data_days.
         Returns empty DataFrame if nothing passes filters.
     """
+    # Parse comma-separated exchange IDs
+    exchange_ids = [x.strip() for x in exchange_id.split(",")]
+
     # Step 1: Fetch universe from CoinGecko
     coins = await fetch_universe(
         min_mcap=min_mcap,
@@ -205,22 +216,45 @@ async def run_screen(
         logger.warning("No coins returned from fetch_universe")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
-    # Step 2: Map CoinGecko symbols to CCXT symbols
-    exchange = getattr(ccxt_async, exchange_id)({"enableRateLimit": True})
-    try:
-        await exchange.load_markets()
-        symbols = map_coingecko_to_ccxt(coins, exchange)
-    finally:
-        await exchange.close()
+    # Step 2: Load markets from all exchanges (skip failures)
+    loaded_exchanges: list[tuple[str, object]] = []
+    for eid in exchange_ids:
+        ex = getattr(ccxt_async, eid)({"enableRateLimit": True})
+        try:
+            await ex.load_markets()
+            market_count = len(ex.markets) if ex.markets else 0
+            loaded_exchanges.append((eid, ex))
+            logger.info("Loaded markets from %s (%d)", eid, market_count)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load markets from %s: %s — skipping", eid, exc,
+            )
+            await ex.close()
 
-    if not symbols:
-        logger.warning("No symbols mapped to exchange")
+    if not loaded_exchanges:
+        logger.warning("All exchanges failed to load markets — returning empty result")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
-    # Step 3: Fetch historical OHLCV data
-    ohlcv_data = await fetch_historical_data(
-        symbols=symbols,
-        exchange_id=exchange_id,
+    loaded_names = ", ".join(
+        f"{eid} ({len(ex.markets)})" for eid, ex in loaded_exchanges
+    )
+    logger.info("Loaded markets from: %s", loaded_names)
+
+    # Step 3: Map CoinGecko symbols to CCXT symbols across all exchanges
+    try:
+        symbol_exchange_map = map_coingecko_to_ccxt_multi(coins, loaded_exchanges)
+    finally:
+        # Close all exchange connections used for market loading
+        for _, ex in loaded_exchanges:
+            await ex.close()
+
+    if not symbol_exchange_map:
+        logger.warning("No symbols mapped to any exchange")
+        return pd.DataFrame(columns=_OUTPUT_COLUMNS)
+
+    # Step 4: Fetch historical OHLCV data from the correct exchange per symbol
+    ohlcv_data = await fetch_historical_data_multi(
+        symbol_exchange_map=symbol_exchange_map,
         days=days,
         use_cache=use_cache,
     )
@@ -229,17 +263,17 @@ async def run_screen(
         logger.warning("No OHLCV data returned")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
-    # Step 4: Compute all metrics (Beta, Correlation, Kelly)
+    # Step 5: Compute all metrics (Beta, Correlation, Kelly)
     metrics = compute_all_metrics(ohlcv_data)
 
     if metrics.empty:
         logger.warning("No metrics computed")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
-    # Step 5: Merge CoinGecko metadata with math engine output
+    # Step 6: Merge CoinGecko metadata with math engine output
     merged = merge_metadata(coins, metrics)
 
-    # Step 6: Apply filters and sort
+    # Step 7: Apply filters and sort
     filtered = apply_filters(
         merged,
         min_beta=min_beta,

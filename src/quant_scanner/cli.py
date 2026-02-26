@@ -36,8 +36,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--exchange",
         type=str,
-        default="binance",
-        help="ccxt exchange ID (default: binance)",
+        default="kucoin,okx,gate",
+        help="Comma-separated ccxt exchange IDs (default: kucoin,okx,gate)",
     )
     parser.add_argument(
         "--min-mcap",
