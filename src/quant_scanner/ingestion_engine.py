@@ -166,7 +166,9 @@ async def fetch_universe(
 
     # --- Fetch 4 pages (top 1000) ---
     all_coins: list[dict] = []
-    async with aiohttp.ClientSession() as session:
+    resolver = aiohttp.ThreadedResolver()
+    connector = aiohttp.TCPConnector(resolver=resolver)
+    async with aiohttp.ClientSession(connector=connector) as session:
         for page in range(1, 5):
             page_coins = await _fetch_page(session, page, headers)
             all_coins.extend(page_coins)
