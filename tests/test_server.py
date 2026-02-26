@@ -52,7 +52,7 @@ def _make_mock_df(n: int = 3) -> pd.DataFrame:
             "total_volume": [5_000_000 + i * 1_000_000 for i in range(n)],
             "beta": [1.5 + i * 0.3 for i in range(n)],
             "correlation": [0.7 + i * 0.05 for i in range(n)],
-            "kelly_fraction": [0.05 + i * 0.02 for i in range(n)],
+            "trend_score": [0.05 + i * 0.02 for i in range(n)],
             "amihud": [1e-8 + i * 1e-9 for i in range(n)],
             "circulating_pct": [0.5 + i * 0.1 for i in range(n)],
         }
@@ -207,7 +207,7 @@ async def test_api_scan_nan_safe(client):
             "total_volume": [5_000_000.0],
             "beta": [1.5],
             "correlation": [0.8],
-            "kelly_fraction": [0.1],
+            "trend_score": [0.1],
             "amihud": [1e-8],
             "circulating_pct": [float("nan")],
         }
@@ -305,7 +305,7 @@ async def test_partials_table_has_color_classes(client):
             "total_volume": [10_000_000.0],
             "beta": [2.5],
             "correlation": [0.9],
-            "kelly_fraction": [0.2],
+            "trend_score": [0.2],
             "amihud": [5e-9],
             "circulating_pct": [0.65],
         }

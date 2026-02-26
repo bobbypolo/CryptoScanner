@@ -9,7 +9,7 @@
             <th>24h Volume</th>
             <th>Beta</th>
             <th>Correlation</th>
-            <th>Kelly %</th>
+            <th>Trend %</th>
             <th>Amihud</th>
             <th>Circ. %</th>
         </tr>
@@ -28,8 +28,8 @@
             <td class="{% if row.get('correlation') is not none and row.get('correlation') > 0.85 %}corr-high{% elif row.get('correlation') is not none and row.get('correlation') >= 0.7 %}corr-mid{% else %}corr-low{% endif %}">
                 {{ row.get('correlation') | format_beta }}
             </td>
-            <td class="{% if row.get('kelly_fraction', row.get('kelly_pct')) is not none and row.get('kelly_fraction', row.get('kelly_pct')) > 0.15 %}kelly-high{% elif row.get('kelly_fraction', row.get('kelly_pct')) is not none and row.get('kelly_fraction', row.get('kelly_pct')) > 0 %}kelly-mid{% else %}kelly-zero{% endif %}">
-                {{ row.get('kelly_fraction', row.get('kelly_pct')) | format_pct }}
+            <td class="{% if row.get('trend_score', row.get('trend_pct')) is not none and row.get('trend_score', row.get('trend_pct')) > 0.15 %}trend-high{% elif row.get('trend_score', row.get('trend_pct')) is not none and row.get('trend_score', row.get('trend_pct')) > 0 %}trend-mid{% else %}trend-zero{% endif %}">
+                {{ row.get('trend_score', row.get('trend_pct')) | format_pct }}
             </td>
             <td class="{% if row.get('amihud') is not none and row.get('amihud') > 1e-7 %}amihud-warn{% else %}amihud-ok{% endif %}">
                 {{ row.get('amihud') | format_amihud }}

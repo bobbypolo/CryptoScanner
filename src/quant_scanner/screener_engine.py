@@ -31,7 +31,7 @@ _OUTPUT_COLUMNS = [
     "volume_24h",
     "beta",
     "correlation",
-    "kelly_fraction",
+    "trend_score",
     "amihud",
     "circulating_pct",
     "data_days",
@@ -116,13 +116,13 @@ def merge_metadata(
     metrics : pd.DataFrame
         Output of compute_all_metrics() with columns:
         symbol (e.g. "RENDER/USDT"), beta, correlation,
-        kelly_fraction, data_days.
+        trend_score, data_days.
 
     Returns
     -------
     pd.DataFrame
         Merged DataFrame with columns: symbol, name, market_cap,
-        volume_24h, beta, correlation, kelly_fraction,
+        volume_24h, beta, correlation, trend_score,
         circulating_pct, data_days.
     """
     # Build a lookup from CCXT-style symbol ("RENDER/USDT") to CG metadata
@@ -167,7 +167,7 @@ def merge_metadata(
                 "volume_24h": meta.get("volume_24h"),
                 "beta": row["beta"],
                 "correlation": row["correlation"],
-                "kelly_fraction": row["kelly_fraction"],
+                "trend_score": row["trend_score"],
                 "amihud": row.get("amihud", np.nan),
                 "circulating_pct": meta.get("circulating_pct", np.nan),
                 "data_days": row["data_days"],
@@ -264,7 +264,7 @@ async def run_screen(
         2. Load markets from all exchanges (skip failures with warning)
         3. map_coingecko_to_ccxt_multi() -- symbol validation across exchanges
         4. fetch_historical_data_multi() -- 60-day OHLCV + BTC baseline
-        5. compute_all_metrics() -- Beta, Correlation, Kelly per coin
+        5. compute_all_metrics() -- Beta, Correlation, Trend Score per coin
         6. merge_metadata() -- join CG metadata with math output
         7. apply_filters() -- final sieve + sort by Beta descending
 
@@ -272,7 +272,7 @@ async def run_screen(
     -------
     pd.DataFrame
         Filtered results with columns: symbol, name, market_cap,
-        volume_24h, beta, correlation, kelly_fraction,
+        volume_24h, beta, correlation, trend_score,
         circulating_pct, data_days.
         Returns empty DataFrame if nothing passes filters.
     """
@@ -344,7 +344,7 @@ async def run_screen(
         logger.warning("All coins dropped by price sanity filter")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
-    # Step 5: Compute all metrics (Beta, Correlation, Kelly)
+    # Step 5: Compute all metrics (Beta, Correlation, Trend Score, Amihud)
     metrics = compute_all_metrics(ohlcv_data)
 
     if metrics.empty:

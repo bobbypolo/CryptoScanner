@@ -1,4 +1,4 @@
-"""Tests for math_engine.py — Beta, Correlation, and Kelly Criterion.
+"""Tests for math_engine.py — Beta, Correlation, Trend Score, and Amihud.
 
 All test cases verify the exact mathematical formulas and edge case guards
 specified in the QUANT-004 acceptance criteria and quant-math/SPEC.md.
@@ -14,7 +14,7 @@ from quant_scanner.math_engine import (
     calculate_amihud,
     calculate_beta,
     calculate_correlation,
-    calculate_kelly,
+    calculate_trend_score,
     compute_all_metrics,
 )
 
@@ -102,53 +102,94 @@ class TestCorrelation:
 
 
 # ---------------------------------------------------------------------------
-# Kelly tests
+# Trend Score tests
 # ---------------------------------------------------------------------------
 
 
-class TestKelly:
-    """Verify Half-Kelly position sizing with all guard clauses."""
+class TestTrendScore:
+    """Verify Trend Score with Z-score dampener."""
 
     def test_60pct_win_rate_avg_ratio_1_5(self) -> None:
-        """60% win rate, avg_win/avg_loss=1.5 -> 0 < Kelly <= 0.25."""
-        # 36 wins of +0.03, 24 losses of -0.02  =>  0.03/0.02 = 1.5
+        """60% win rate, avg_win/avg_loss=1.5 -> 0 < score <= 0.25."""
         returns = np.array([0.03] * 36 + [-0.02] * 24)
-        kelly = calculate_kelly(returns)
-        assert kelly > 0, f"Expected Kelly > 0, got {kelly}"
-        assert kelly <= 0.25, f"Expected Kelly <= 0.25, got {kelly}"
+        score = calculate_trend_score(returns)
+        assert score > 0, f"Expected score > 0, got {score}"
+        assert score <= 0.25, f"Expected score <= 0.25, got {score}"
 
     def test_30pct_win_rate_avg_ratio_0_8(self) -> None:
-        """30% win rate, avg_win/avg_loss=0.8 -> Kelly == 0.0 (no edge)."""
-        # 18 wins of +0.016, 42 losses of -0.02  =>  0.016/0.02 = 0.8
+        """30% win rate, avg_win/avg_loss=0.8 -> score == 0.0 (no edge)."""
         returns = np.array([0.016] * 18 + [-0.02] * 42)
-        kelly = calculate_kelly(returns)
-        assert kelly == 0.0, f"Expected Kelly == 0.0, got {kelly}"
+        score = calculate_trend_score(returns)
+        assert score == 0.0, f"Expected score == 0.0, got {score}"
 
     def test_90pct_win_rate_capped_at_max(self) -> None:
-        """90% win rate -> Kelly <= max_fraction (0.25 cap enforced)."""
-        # 54 wins of +0.01, 6 losses of -0.005
+        """90% win rate -> score <= max_fraction (0.25 cap enforced)."""
         returns = np.array([0.01] * 54 + [-0.005] * 6)
-        kelly = calculate_kelly(returns)
-        assert kelly <= 0.25, f"Expected Kelly <= 0.25, got {kelly}"
-        assert kelly > 0, f"Expected Kelly > 0, got {kelly}"
+        score = calculate_trend_score(returns)
+        assert score <= 0.25, f"Expected score <= 0.25, got {score}"
+        assert score > 0, f"Expected score > 0, got {score}"
 
     def test_all_positive_returns_zero(self) -> None:
-        """ALL positive returns (no losses) -> Kelly == 0.0."""
+        """ALL positive returns (no losses) -> score == 0.0."""
         returns = np.array([0.01] * 60)
-        kelly = calculate_kelly(returns)
-        assert kelly == 0.0, f"Expected Kelly == 0.0 with no losses, got {kelly}"
+        score = calculate_trend_score(returns)
+        assert score == 0.0, f"Expected score == 0.0 with no losses, got {score}"
 
     def test_all_negative_returns_zero(self) -> None:
-        """ALL negative returns (no wins) -> Kelly == 0.0."""
+        """ALL negative returns (no wins) -> score == 0.0."""
         returns = np.array([-0.01] * 60)
-        kelly = calculate_kelly(returns)
-        assert kelly == 0.0, f"Expected Kelly == 0.0 with no wins, got {kelly}"
+        score = calculate_trend_score(returns)
+        assert score == 0.0, f"Expected score == 0.0 with no wins, got {score}"
 
     def test_insufficient_trades(self) -> None:
-        """Fewer than min_trades -> Kelly == 0.0."""
+        """Fewer than min_trades -> score == 0.0."""
         returns = np.array([0.01] * 10 + [-0.01] * 5)
-        kelly = calculate_kelly(returns, min_trades=30)
-        assert kelly == 0.0, f"Expected Kelly == 0.0 with insufficient trades"
+        score = calculate_trend_score(returns, min_trades=30)
+        assert score == 0.0, f"Expected score == 0.0 with insufficient trades"
+
+    def test_zscore_dampener_applied(self) -> None:
+        """Parabolic close prices (Z > 2.5) with positive edge -> score halved."""
+        returns = np.array([0.03] * 36 + [-0.02] * 24)
+        # Build close prices with a massive spike at the end:
+        # 59 flat values at 10.0, then last value at 100.0
+        # This gives Z ≈ 5.3 (well above 2.5 threshold)
+        close = pd.Series(np.append(np.full(59, 10.0), [100.0]))
+        score_no_close = calculate_trend_score(returns)
+        score_with_close = calculate_trend_score(returns, close_prices=close)
+        assert score_no_close > 0
+        assert score_with_close < score_no_close
+        assert np.isclose(score_with_close, score_no_close * 0.5, rtol=0.01)
+
+    def test_zscore_below_threshold(self) -> None:
+        """Close prices with Z ~ 1.5 -> score unchanged."""
+        returns = np.array([0.03] * 36 + [-0.02] * 24)
+        # Gently rising close prices — Z should be below 2.5
+        close = pd.Series(np.linspace(10.0, 12.0, 60))
+        score_no_close = calculate_trend_score(returns)
+        score_with_close = calculate_trend_score(returns, close_prices=close)
+        assert score_with_close == score_no_close
+
+    def test_zscore_no_close_prices(self) -> None:
+        """close_prices=None -> score unchanged."""
+        returns = np.array([0.03] * 36 + [-0.02] * 24)
+        score = calculate_trend_score(returns, close_prices=None)
+        assert score > 0
+
+    def test_zscore_flat_std(self) -> None:
+        """Constant close prices (std=0) -> score unchanged (no dampening)."""
+        returns = np.array([0.03] * 36 + [-0.02] * 24)
+        close = pd.Series(np.full(60, 10.0))
+        score_no_close = calculate_trend_score(returns)
+        score_with_close = calculate_trend_score(returns, close_prices=close)
+        assert score_with_close == score_no_close
+
+    def test_zscore_insufficient_data(self) -> None:
+        """Only 20 close prices -> skip Z-score, score unchanged."""
+        returns = np.array([0.03] * 36 + [-0.02] * 24)
+        close = pd.Series(np.linspace(10.0, 50.0, 20))  # less than 30
+        score_no_close = calculate_trend_score(returns)
+        score_with_close = calculate_trend_score(returns, close_prices=close)
+        assert score_with_close == score_no_close
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +265,7 @@ class TestComputeAllMetrics:
         assert result.iloc[0]["symbol"] == "ALT/USDT"
 
         # Verify all expected columns
-        for col in ["symbol", "beta", "correlation", "kelly_fraction", "amihud", "data_days"]:
+        for col in ["symbol", "beta", "correlation", "trend_score", "amihud", "data_days"]:
             assert col in result.columns, f"Missing column: {col}"
 
         # Amihud should be a valid number

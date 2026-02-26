@@ -12,15 +12,15 @@ from quant_scanner.dashboard import render_no_results, render_results
 DRY_RUN_DATA = pd.DataFrame([
     {"symbol": "RENDER/USDT", "name": "Render", "market_cap": 45_000_000,
      "volume_24h": 8_500_000, "beta": 2.34, "correlation": 0.89,
-     "kelly_fraction": 0.12, "amihud": 1.2e-8, "circulating_pct": 0.78,
+     "trend_score": 0.12, "amihud": 1.2e-8, "circulating_pct": 0.78,
      "data_days": 60},
     {"symbol": "FET/USDT", "name": "Fetch.ai", "market_cap": 120_000_000,
      "volume_24h": 15_000_000, "beta": 1.87, "correlation": 0.82,
-     "kelly_fraction": 0.09, "amihud": 3.5e-8, "circulating_pct": 0.85,
+     "trend_score": 0.09, "amihud": 3.5e-8, "circulating_pct": 0.85,
      "data_days": 60},
     {"symbol": "EXAMPLE/USDT", "name": "Example Coin", "market_cap": 30_000_000,
      "volume_24h": 2_100_000, "beta": 1.62, "correlation": 0.74,
-     "kelly_fraction": 0.05, "amihud": 2.1e-7, "circulating_pct": 0.91,
+     "trend_score": 0.05, "amihud": 2.1e-7, "circulating_pct": 0.91,
      "data_days": 45},
 ])
 

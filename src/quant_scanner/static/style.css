@@ -327,7 +327,7 @@ tbody td:nth-child(2) {
     font-weight: 600;
 }
 
-/* Right-align numeric columns: Market Cap(4), Volume(5), Beta(6), Corr(7), Kelly(8), Circ(9) */
+/* Right-align numeric columns: Market Cap(4), Volume(5), Beta(6), Corr(7), Trend(8), Amihud(9), Circ(10) */
 thead th:nth-child(n+4),
 tbody td:nth-child(n+4) {
     text-align: right;
@@ -360,16 +360,16 @@ tbody td:nth-child(n+4) {
     color: var(--text-primary);
 }
 
-.kelly-high {
+.trend-high {
     color: #3fb950;
     font-weight: bold;
 }
 
-.kelly-mid {
+.trend-mid {
     color: #d29922;
 }
 
-.kelly-zero {
+.trend-zero {
     color: #484f58;
 }
 
