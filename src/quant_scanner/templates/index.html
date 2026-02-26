@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Quant Scanner &mdash; Live Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script>window.htmx || document.write('<script src="/static/vendor/htmx.min.js"><\/script>')</script>
+    <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+    <script>window.LightweightCharts || document.write('<script src="/static/vendor/lightweight-charts.min.js"><\/script>')</script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <h1>
+            <span class="live-indicator" title="Live"></span>
+            Crypto Quant Scanner
+        </h1>
+        <span class="header-version">v{{ status.scan_count is defined and status.scan_count or 0 }} scans &middot; v0.1.0</span>
+    </header>
+
+    <!-- Status Bar -->
+    <section class="status-section"
+             id="status-bar"
+             hx-get="/partials/status"
+             hx-trigger="every 10s"
+             hx-swap="innerHTML"
+             hx-indicator=".spinner"
+             hx-on::after-request="if(event.detail.failed) this.innerHTML = '<p class=error-message>Error loading status</p>'">
+        <span class="spinner"></span>
+        {% include "partials/status.html" %}
+    </section>
+
+    <!-- Config Display -->
+    <section class="config-section">
+        <span class="config-label">Active Config:</span>
+        <span class="config-value">Exchange: {{ config.get('exchange_id', 'gate') if config else 'gate' }}</span>
+        <span class="config-value">Min Beta: {{ config.get('min_beta', '1.5') if config else '1.5' }}</span>
+        <span class="config-value">Min Corr: {{ config.get('min_correlation', '0.7') if config else '0.7' }}</span>
+        <span class="config-value">Min Vol: {{ config.get('min_volume', '1000000') if config else '1000000' }}</span>
+    </section>
+
+    <!-- Controls Row -->
+    <section class="controls-section">
+        <button class="btn-refresh"
+                hx-post="/api/refresh"
+                hx-swap="none"
+                hx-indicator=".spinner"
+                title="Trigger an immediate re-scan">
+            &#x21bb; Refresh Scan
+        </button>
+        <span class="spinner"></span>
+    </section>
+
+    <!-- Results Table -->
+    <main class="main-content">
+        <div class="table-container"
+             id="results-table"
+             hx-get="/partials/table"
+             hx-trigger="every 60s"
+             hx-swap="innerHTML"
+             hx-indicator=".spinner"
+             hx-on::after-request="if(event.detail.failed) this.innerHTML = '<p class=error-message>Error loading data</p>'">
+            <span class="spinner"></span>
+            {% include "partials/table.html" %}
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <span>Crypto Quant Scanner v0.1.0</span>
+        <span>Powered by <a href="https://www.coingecko.com/" target="_blank" rel="noopener">CoinGecko</a> + <a href="https://github.com/ccxt/ccxt" target="_blank" rel="noopener">CCXT</a></span>
+    </footer>
+
+    <!-- Charts placeholder -->
+    <script src="/static/charts.js"></script>
+
+    <!-- WebSocket live push updates -->
+    <script>
+    (function() {
+        var reconnectDelay = 1000;
+        var maxDelay = 30000;
+        var ws = null;
+        var indicator = document.querySelector('.live-indicator');
+
+        function setConnected(connected) {
+            if (!indicator) return;
+            if (connected) {
+                indicator.classList.add('ws-connected');
+                indicator.classList.remove('ws-reconnecting');
+                indicator.title = 'Live — connected';
+            } else {
+                indicator.classList.remove('ws-connected');
+                indicator.classList.add('ws-reconnecting');
+                indicator.title = 'Reconnecting...';
+            }
+        }
+
+        function connect() {
+            var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(protocol + '//' + location.host + '/ws/updates');
+
+            ws.onopen = function() {
+                reconnectDelay = 1000;
+                setConnected(true);
+            };
+
+            ws.onmessage = function(event) {
+                var data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    return;
+                }
+                if (data.type === 'scan_complete') {
+                    // Abort any in-flight HTMX request on the table, then refresh via JS
+                    htmx.trigger('#results-table', 'htmx:abort');
+                    htmx.ajax('GET', '/partials/table', '#results-table');
+                    // Also refresh the status bar
+                    htmx.ajax('GET', '/partials/status', '#status-bar');
+                }
+            };
+
+            ws.onclose = function() {
+                setConnected(false);
+                scheduleReconnect();
+            };
+
+            ws.onerror = function() {
+                setConnected(false);
+                if (ws) {
+                    ws.close();
+                }
+            };
+        }
+
+        function scheduleReconnect() {
+            setTimeout(function() {
+                reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+                connect();
+            }, reconnectDelay);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            indicator = document.querySelector('.live-indicator');
+            connect();
+        });
+
+        // If DOM is already loaded (script at bottom of body)
+        if (document.readyState !== 'loading') {
+            connect();
+        }
+    })();
+    </script>
+</body>
+</html>

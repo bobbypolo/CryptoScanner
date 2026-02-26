@@ -1,0 +1,446 @@
+/* ===================================================================
+   Crypto Quant Scanner — Dark Theme Dashboard
+   =================================================================== */
+
+/* ----- Reset & Base ----- */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-hover: #21262d;
+    --text-primary: #c9d1d9;
+    --text-secondary: #8b949e;
+    --text-dim: #484f58;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --border: #30363d;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+html {
+    font-size: 14px;
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+a {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* ----- Header ----- */
+.header {
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.live-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--text-dim);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.live-indicator.ws-connected {
+    background-color: var(--green);
+}
+
+.live-indicator.ws-reconnecting {
+    background-color: var(--text-dim);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.header-version {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+/* ----- Status Bar ----- */
+.status-section {
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 1.5rem;
+}
+
+.status-bar-inner {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+}
+
+.status-badge::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-idle {
+    color: var(--green);
+    background-color: rgba(63, 185, 80, 0.1);
+}
+.status-idle::before {
+    background-color: var(--green);
+}
+
+.status-scanning {
+    color: var(--yellow);
+    background-color: rgba(210, 153, 34, 0.1);
+}
+.status-scanning::before {
+    background-color: var(--yellow);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.status-error {
+    color: var(--red);
+    background-color: rgba(248, 81, 73, 0.1);
+}
+.status-error::before {
+    background-color: var(--red);
+}
+
+.status-item {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.status-item strong {
+    color: var(--text-primary);
+}
+
+.status-error-message {
+    font-size: 0.85rem;
+    color: var(--red);
+    font-weight: 500;
+}
+
+/* ----- Config Display ----- */
+.config-section {
+    padding: 0.5rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+}
+
+.config-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.config-value {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    background-color: var(--bg-secondary);
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+}
+
+/* ----- Controls Row ----- */
+.controls-section {
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.btn-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.85rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: var(--font-sans);
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+.btn-refresh:hover {
+    background-color: var(--bg-hover);
+    border-color: var(--text-dim);
+}
+
+.btn-refresh:active {
+    background-color: var(--border);
+}
+
+/* ----- Spinner ----- */
+.spinner {
+    display: none;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+.htmx-request .spinner {
+    display: inline-block;
+}
+
+.htmx-request.htmx-request .spinner {
+    display: inline-block;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ----- HTMX swap transition ----- */
+.htmx-swapping {
+    opacity: 0;
+    transition: opacity 0.2s ease-out;
+}
+
+/* ----- Main Content / Table Section ----- */
+.main-content {
+    flex: 1;
+    padding: 1rem 1.5rem;
+}
+
+.table-container {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    font-family: var(--font-mono);
+}
+
+thead th {
+    background-color: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.65rem 0.75rem;
+    text-align: left;
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+}
+
+thead th:first-child {
+    text-align: right;
+    padding-right: 1rem;
+}
+
+tbody tr {
+    background-color: var(--bg-primary);
+    transition: background-color 0.1s;
+}
+
+tbody tr:nth-child(even) {
+    background-color: var(--bg-secondary);
+}
+
+tbody tr:hover {
+    background-color: var(--bg-hover);
+}
+
+tbody td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+tbody td:first-child {
+    text-align: right;
+    padding-right: 1rem;
+    color: var(--text-dim);
+}
+
+/* Symbol column */
+tbody td:nth-child(2) {
+    color: var(--blue);
+    font-weight: 600;
+}
+
+/* Right-align numeric columns: Market Cap(4), Volume(5), Beta(6), Corr(7), Kelly(8), Circ(9) */
+thead th:nth-child(n+4),
+tbody td:nth-child(n+4) {
+    text-align: right;
+}
+
+/* ----- Metric color classes ----- */
+.beta-high {
+    color: #3fb950;
+    font-weight: bold;
+}
+
+.beta-mid {
+    color: #d29922;
+}
+
+.beta-low {
+    color: var(--text-primary);
+}
+
+.corr-high {
+    color: #3fb950;
+    font-weight: bold;
+}
+
+.corr-mid {
+    color: #d29922;
+}
+
+.corr-low {
+    color: var(--text-primary);
+}
+
+.kelly-high {
+    color: #3fb950;
+    font-weight: bold;
+}
+
+.kelly-mid {
+    color: #d29922;
+}
+
+.kelly-zero {
+    color: #484f58;
+}
+
+/* ----- Empty / Waiting messages ----- */
+.empty-message {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+    font-size: 1rem;
+}
+
+.error-message {
+    text-align: center;
+    padding: 1rem;
+    color: var(--red);
+    font-size: 0.9rem;
+}
+
+/* ----- Footer ----- */
+.footer {
+    background-color: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
+.footer a {
+    color: var(--text-secondary);
+}
+
+/* ----- Responsive: horizontal scroll on small screens ----- */
+@media (max-width: 768px) {
+    .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+
+    .status-bar-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .config-section {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .controls-section {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .main-content {
+        padding: 0.5rem;
+    }
+
+    .table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .footer {
+        flex-direction: column;
+        gap: 0.25rem;
+        text-align: center;
+    }
+}

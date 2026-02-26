@@ -1,0 +1,22 @@
+<div class="status-bar-inner">
+    <span class="status-badge status-{{ status.status }}">
+        {{ status.status | upper }}
+    </span>
+    <span class="status-item">
+        Last scan: <strong>{{ status.last_scan_at or 'Never' }}</strong>
+    </span>
+    <span class="status-item">
+        Next scan: <strong>{{ status.next_scan_at or 'Pending' }}</strong>
+    </span>
+    <span class="status-item">
+        Coins: <strong>{{ status.coin_count }}</strong>
+    </span>
+    <span class="status-item">
+        Scans: <strong>{{ status.scan_count }}</strong>
+    </span>
+    {% if status.error %}
+    <span class="status-error-message">
+        Error: {{ status.error }}
+    </span>
+    {% endif %}
+</div>

@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import sys
 
 import pandas as pd
 
@@ -74,6 +75,28 @@ def parse_args(argv=None):
         default=False,
         help="Force fresh API calls, bypass cache",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        default=False,
+        help="Launch live web dashboard",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+    )
+    parser.add_argument(
+        "--refresh-interval",
+        type=int,
+        default=300,
+        help="Scan refresh interval in seconds",
+    )
     return parser.parse_args(argv)
 
 
@@ -83,8 +106,43 @@ def main():
 
     args = parse_args()
 
+    if args.serve and args.dry_run:
+        print("Cannot use --serve and --dry-run together")
+        sys.exit(1)
+
     if args.dry_run:
         render_results(DRY_RUN_DATA)
+        return
+
+    if args.serve:
+        import uvicorn
+
+        from quant_scanner import server
+
+        scan_kwargs = {
+            "exchange_id": args.exchange,
+            "min_mcap": args.min_mcap,
+            "max_mcap": args.max_mcap,
+            "min_beta": args.min_beta,
+            "min_correlation": args.min_corr,
+            "min_volume": args.min_volume,
+            "use_cache": not args.no_cache,
+        }
+        server.configure(
+            scan_kwargs=scan_kwargs,
+            interval_seconds=args.refresh_interval,
+        )
+        try:
+            uvicorn.run(
+                server.app,
+                host=args.host,
+                port=args.port,
+            )
+        except OSError:
+            print(
+                f"Port {args.port} is already in use. "
+                f"Try --port {args.port + 1}"
+            )
         return
 
     asyncio.run(async_main(args))
