@@ -1,0 +1,42 @@
+{% if results %}
+<table>
+    <thead>
+        <tr>
+            <th>Rank</th>
+            <th>Symbol</th>
+            <th>Name</th>
+            <th>Market Cap</th>
+            <th>24h Volume</th>
+            <th>Beta</th>
+            <th>Correlation</th>
+            <th>Kelly %</th>
+            <th>Circ. %</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in results %}
+        <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ row.get('symbol', 'N/A') }}</td>
+            <td>{{ row.get('name', 'N/A') }}</td>
+            <td>{{ row.get('market_cap') | format_mcap }}</td>
+            <td>{{ row.get('total_volume', row.get('volume')) | format_volume }}</td>
+            <td class="{% if row.get('beta') is not none and row.get('beta') > 2.0 %}beta-high{% elif row.get('beta') is not none and row.get('beta') >= 1.5 %}beta-mid{% else %}beta-low{% endif %}">
+                {{ row.get('beta') | format_beta }}
+            </td>
+            <td class="{% if row.get('correlation') is not none and row.get('correlation') > 0.85 %}corr-high{% elif row.get('correlation') is not none and row.get('correlation') >= 0.7 %}corr-mid{% else %}corr-low{% endif %}">
+                {{ row.get('correlation') | format_beta }}
+            </td>
+            <td class="{% if row.get('kelly_fraction', row.get('kelly_pct')) is not none and row.get('kelly_fraction', row.get('kelly_pct')) > 0.15 %}kelly-high{% elif row.get('kelly_fraction', row.get('kelly_pct')) is not none and row.get('kelly_fraction', row.get('kelly_pct')) > 0 %}kelly-mid{% else %}kelly-zero{% endif %}">
+                {{ row.get('kelly_fraction', row.get('kelly_pct')) | format_pct }}
+            </td>
+            <td>{{ row.get('circulating_pct') | format_pct }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% elif has_scanned %}
+<p class="empty-message">No coins pass current filters</p>
+{% else %}
+<p class="empty-message">Waiting for first scan...</p>
+{% endif %}
