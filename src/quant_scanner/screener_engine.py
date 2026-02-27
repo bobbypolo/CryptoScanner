@@ -182,11 +182,11 @@ def merge_metadata(
 
 def apply_filters(
     df: pd.DataFrame,
-    min_beta: float = 1.5,
-    min_correlation: float = 0.7,
+    min_beta: float = 1.0,
+    min_correlation: float = 0.6,
     min_volume: float = 1_000_000,
     min_supply_pct: float = 0.70,
-    max_amihud: float = 5e-7,
+    max_amihud: float = 1e-5,
 ) -> pd.DataFrame:
     """Apply the screening filters in order and sort by beta descending.
 
@@ -211,28 +211,40 @@ def apply_filters(
     result = df.copy()
 
     # 1. data_days >= 20
+    prev = len(result)
     result = result[result["data_days"] >= 20]
+    logger.info("Filter data_days>=20: %d → %d (-%d)", prev, len(result), prev - len(result))
 
     # 2. beta > min_beta
+    prev = len(result)
     result = result[result["beta"] > min_beta]
+    logger.info("Filter beta>%.2f: %d → %d (-%d)", min_beta, prev, len(result), prev - len(result))
 
     # 3. correlation > min_correlation
+    prev = len(result)
     result = result[result["correlation"] > min_correlation]
+    logger.info("Filter corr>%.2f: %d → %d (-%d)", min_correlation, prev, len(result), prev - len(result))
 
     # 4. volume_24h > min_volume
+    prev = len(result)
     result = result[result["volume_24h"] > min_volume]
+    logger.info("Filter vol>%.0f: %d → %d (-%d)", min_volume, prev, len(result), prev - len(result))
 
     # 5. circulating_pct > min_supply_pct ONLY where not NaN
     #    NaN rows pass this filter
+    prev = len(result)
     supply_mask = result["circulating_pct"].isna() | (
         result["circulating_pct"] > min_supply_pct
     )
     result = result[supply_mask]
+    logger.info("Filter supply>%.0f%%: %d → %d (-%d)", min_supply_pct * 100, prev, len(result), prev - len(result))
 
     # 6. amihud <= max_amihud ONLY where not NaN
     #    NaN rows pass this filter (same pattern as circulating_pct)
+    prev = len(result)
     amihud_mask = result["amihud"].isna() | (result["amihud"] <= max_amihud)
     result = result[amihud_mask]
+    logger.info("Filter amihud<=%.1e: %d → %d (-%d)", max_amihud, prev, len(result), prev - len(result))
 
     # Sort by beta descending
     result = result.sort_values("beta", ascending=False).reset_index(drop=True)
@@ -244,11 +256,11 @@ async def run_screen(
     exchange_id: str = "kucoin,okx,gate",
     min_mcap: float = 20_000_000,
     max_mcap: float = 150_000_000,
-    min_beta: float = 1.5,
-    min_correlation: float = 0.7,
+    min_beta: float = 1.0,
+    min_correlation: float = 0.6,
     min_volume: float = 1_000_000,
     min_supply_pct: float = 0.70,
-    max_amihud: float = 5e-7,
+    max_amihud: float = 1e-5,
     days: int = 60,
     use_cache: bool = True,
 ) -> pd.DataFrame:
@@ -277,7 +289,7 @@ async def run_screen(
         Returns empty DataFrame if nothing passes filters.
     """
     # Parse comma-separated exchange IDs
-    exchange_ids = [x.strip() for x in exchange_id.split(",")]
+    exchange_ids = [x.strip().lower() for x in exchange_id.split(",")]
 
     # Step 1: Fetch universe from CoinGecko
     coins = await fetch_universe(

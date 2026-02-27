@@ -6,8 +6,12 @@ and Amihud illiquidity ratio for altcoins relative to BTC.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_beta(
@@ -97,8 +101,9 @@ def calculate_trend_score(
         sma_30 = close_prices.rolling(30).mean()
         std_30 = close_prices.rolling(30).std()
         last_std = std_30.iloc[-1]
-        if pd.notna(last_std) and last_std > 0:
-            z = (close_prices.iloc[-1] - sma_30.iloc[-1]) / last_std
+        last_sma = sma_30.iloc[-1]
+        if pd.notna(last_std) and last_std > 0 and pd.notna(last_sma):
+            z = (close_prices.iloc[-1] - last_sma) / last_std
             if z > z_threshold:
                 score *= z_dampener
 
@@ -171,6 +176,13 @@ def compute_all_metrics(
 
         # data_days = count of non-NaN values in RETURNS series
         data_days = int(asset_returns.notna().sum())
+
+        # Skip coins with insufficient data before expensive rolling calcs
+        if data_days < 20:
+            logger.warning(
+                "Skipping %s: only %d valid returns (need 20)", symbol, data_days,
+            )
+            continue
 
         # Rolling beta and correlation
         beta_series = calculate_beta(asset_returns, btc_returns)

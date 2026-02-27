@@ -57,14 +57,14 @@ def parse_args(argv=None):
     parser.add_argument(
         "--min-beta",
         type=float,
-        default=1.5,
-        help="Minimum Beta threshold (default: 1.5)",
+        default=1.0,
+        help="Minimum Beta threshold (default: 1.0)",
     )
     parser.add_argument(
         "--min-corr",
         type=float,
-        default=0.7,
-        help="Minimum correlation threshold (default: 0.7)",
+        default=0.6,
+        help="Minimum correlation threshold (default: 0.6)",
     )
     parser.add_argument(
         "--min-volume",
@@ -75,8 +75,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--max-amihud",
         type=float,
-        default=5e-7,
-        help="Maximum Amihud illiquidity ratio (default: 5e-7)",
+        default=1e-5,
+        help="Maximum Amihud illiquidity ratio (default: 1e-5)",
     )
     parser.add_argument(
         "--no-cache",

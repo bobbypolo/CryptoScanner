@@ -21,15 +21,15 @@
             <td>{{ row.get('symbol', 'N/A') }}</td>
             <td>{{ row.get('name', 'N/A') }}</td>
             <td>{{ row.get('market_cap') | format_mcap }}</td>
-            <td>{{ row.get('total_volume', row.get('volume')) | format_volume }}</td>
+            <td>{{ row.get('volume_24h') | format_volume }}</td>
             <td class="{% if row.get('beta') is not none and row.get('beta') > 2.0 %}beta-high{% elif row.get('beta') is not none and row.get('beta') >= 1.5 %}beta-mid{% else %}beta-low{% endif %}">
                 {{ row.get('beta') | format_beta }}
             </td>
             <td class="{% if row.get('correlation') is not none and row.get('correlation') > 0.85 %}corr-high{% elif row.get('correlation') is not none and row.get('correlation') >= 0.7 %}corr-mid{% else %}corr-low{% endif %}">
                 {{ row.get('correlation') | format_beta }}
             </td>
-            <td class="{% if row.get('trend_score', row.get('trend_pct')) is not none and row.get('trend_score', row.get('trend_pct')) > 0.15 %}trend-high{% elif row.get('trend_score', row.get('trend_pct')) is not none and row.get('trend_score', row.get('trend_pct')) > 0 %}trend-mid{% else %}trend-zero{% endif %}">
-                {{ row.get('trend_score', row.get('trend_pct')) | format_pct }}
+            <td class="{% if row.get('trend_score') is not none and row.get('trend_score') > 0.15 %}trend-high{% elif row.get('trend_score') is not none and row.get('trend_score') > 0 %}trend-mid{% else %}trend-zero{% endif %}">
+                {{ row.get('trend_score') | format_pct }}
             </td>
             <td class="{% if row.get('amihud') is not none and row.get('amihud') > 1e-7 %}amihud-warn{% else %}amihud-ok{% endif %}">
                 {{ row.get('amihud') | format_amihud }}

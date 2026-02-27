@@ -315,3 +315,52 @@ class TestComputeAllMetrics:
         assert len(result) == 2
         symbols = set(result["symbol"].tolist())
         assert symbols == {"ALT1/USDT", "ALT2/USDT"}
+
+    def test_early_exit_insufficient_data(self) -> None:
+        """Coin with <20 returns is excluded from compute_all_metrics results."""
+        btc_close = pd.Series(range(1, 61), dtype=float)  # 60 prices → 59 returns
+        # Only 10 close prices → 9 returns (< 20)
+        short_close = pd.Series(range(1, 11), dtype=float)
+
+        ohlcv_data = {
+            "BTC/USDT": pd.DataFrame({"close": btc_close}),
+            "SHORT/USDT": pd.DataFrame({"close": short_close}),
+        }
+
+        result = compute_all_metrics(ohlcv_data)
+        assert len(result) == 0, "Coin with <20 returns should be skipped"
+
+    def test_early_exit_does_not_skip_sufficient_data(self) -> None:
+        """Coin with >=20 returns is NOT skipped."""
+        np.random.seed(42)
+        btc_close = pd.Series(100 + np.cumsum(np.random.randn(60) * 2))
+        alt_close = pd.Series(50 + np.cumsum(np.random.randn(60) * 3))
+
+        ohlcv_data = {
+            "BTC/USDT": pd.DataFrame({"close": btc_close}),
+            "GOOD/USDT": pd.DataFrame({"close": alt_close, "volume": np.full(60, 1e6)}),
+        }
+
+        result = compute_all_metrics(ohlcv_data)
+        assert len(result) == 1
+        assert result.iloc[0]["symbol"] == "GOOD/USDT"
+
+
+# ---------------------------------------------------------------------------
+# Z-score sma NaN guard test (M1)
+# ---------------------------------------------------------------------------
+
+
+def test_zscore_sma_nan_guard():
+    """NaN in last 30 close prices -> dampener skipped, no crash."""
+    returns = np.array([0.03] * 36 + [-0.02] * 24)
+    # Create close prices where the last 30 values include NaN
+    # This makes sma_30.iloc[-1] = NaN
+    close = pd.Series([np.nan] * 30 + list(np.linspace(10, 12, 30)))
+    # With first 30 being NaN, sma_30 at position 29 is NaN,
+    # but sma_30 at the end should be valid from the linspace portion.
+    # Instead, make ALL close prices NaN so sma_30.iloc[-1] is definitely NaN
+    close_all_nan = pd.Series([np.nan] * 60)
+    score = calculate_trend_score(returns, close_prices=close_all_nan)
+    # Should not crash, and score should be positive (dampener skipped)
+    assert score > 0

@@ -172,7 +172,6 @@ async def test_cache_saves_and_loads(tmp_path, mock_coingecko_response):
     with (
         patch("quant_scanner.ingestion_engine.aiohttp.ClientSession", return_value=mock_session),
         patch("quant_scanner.ingestion_engine._CACHE_PATH", str(cache_file)),
-        patch("quant_scanner.ingestion_engine.os.makedirs"),
     ):
         first_result = await fetch_universe(use_cache=True)
 
@@ -238,11 +237,8 @@ def test_ohlcv_dataframe_format(mock_ohlcv_raw):
     assert str(df.index.tz) == "UTC"
 
 
-def test_timestamp_alignment():
-    """Altcoin DataFrame missing a date is reindexed to BTC's index,
-    and the gap is forward-filled from the previous day's values."""
-
-    # BTC has 5 consecutive dates
+def _make_alignment_data():
+    """Helper: BTC (5 days) + altcoin missing 2024-01-03."""
     btc_dates = pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC")
     btc_df = pd.DataFrame(
         {
@@ -254,8 +250,6 @@ def test_timestamp_alignment():
         },
         index=btc_dates,
     )
-
-    # Altcoin is missing 2024-01-03 (index position 2)
     alt_dates = pd.DatetimeIndex(
         ["2024-01-01", "2024-01-02", "2024-01-04", "2024-01-05"],
         tz="UTC",
@@ -270,6 +264,14 @@ def test_timestamp_alignment():
         },
         index=alt_dates,
     )
+    return btc_df, alt_df
+
+
+def test_timestamp_alignment():
+    """Altcoin DataFrame missing a date is reindexed to BTC's index.
+    Missing dates stay NaN (no ffill)."""
+
+    btc_df, alt_df = _make_alignment_data()
 
     aligned = align_to_btc_index(btc_df, {"ALT/USDT": alt_df})
     result = aligned["ALT/USDT"]
@@ -278,14 +280,59 @@ def test_timestamp_alignment():
     assert len(result) == 5, f"Expected 5 rows, got {len(result)}"
     assert result.index.equals(btc_df.index), "Index should match BTC's DatetimeIndex"
 
-    # The gap on 2024-01-03 should be forward-filled from 2024-01-02
+    # The gap on 2024-01-03 should be NaN (no ffill)
     jan_03 = pd.Timestamp("2024-01-03", tz="UTC")
-    assert result.loc[jan_03, "close"] == 56, (
-        "2024-01-03 close should be ffilled from 2024-01-02 (56)"
+    assert pd.isna(result.loc[jan_03, "close"]), (
+        "2024-01-03 close should be NaN (gap, no ffill)"
     )
-    assert result.loc[jan_03, "open"] == 51, (
-        "2024-01-03 open should be ffilled from 2024-01-02 (51)"
+    assert pd.isna(result.loc[jan_03, "open"]), (
+        "2024-01-03 open should be NaN (gap, no ffill)"
     )
+
+
+def test_alignment_no_ffill_nans_at_missing_dates():
+    """After alignment, missing dates have NaN close (not ffilled values)."""
+    btc_df, alt_df = _make_alignment_data()
+    aligned = align_to_btc_index(btc_df, {"ALT/USDT": alt_df})
+    result = aligned["ALT/USDT"]
+
+    jan_03 = pd.Timestamp("2024-01-03", tz="UTC")
+    for col in ["open", "high", "low", "close", "volume"]:
+        assert pd.isna(result.loc[jan_03, col]), (
+            f"{col} on missing date should be NaN, got {result.loc[jan_03, col]}"
+        )
+
+
+def test_alignment_returns_no_synthetic_zeros():
+    """pct_change() on aligned data has no 0.0 returns at gap positions."""
+    btc_df, alt_df = _make_alignment_data()
+    aligned = align_to_btc_index(btc_df, {"ALT/USDT": alt_df})
+    result = aligned["ALT/USDT"]
+
+    returns = result["close"].pct_change()
+    # Drop NaN (expected at gaps and first row) — remaining should have no exact zeros
+    # from synthetic ffill. Real data could have 0% returns but our fixture doesn't.
+    non_nan_returns = returns.dropna()
+    assert (non_nan_returns != 0.0).all(), (
+        f"Synthetic zero returns found: {non_nan_returns[non_nan_returns == 0.0]}"
+    )
+
+
+def test_alignment_preserves_real_data():
+    """Dates where altcoin had real data keep original values."""
+    btc_df, alt_df = _make_alignment_data()
+    aligned = align_to_btc_index(btc_df, {"ALT/USDT": alt_df})
+    result = aligned["ALT/USDT"]
+
+    jan_01 = pd.Timestamp("2024-01-01", tz="UTC")
+    jan_02 = pd.Timestamp("2024-01-02", tz="UTC")
+    jan_04 = pd.Timestamp("2024-01-04", tz="UTC")
+    jan_05 = pd.Timestamp("2024-01-05", tz="UTC")
+
+    assert result.loc[jan_01, "close"] == 55
+    assert result.loc[jan_02, "close"] == 56
+    assert result.loc[jan_04, "close"] == 58
+    assert result.loc[jan_05, "close"] == 59
 
 
 def test_symbol_mapping(mock_exchange):
@@ -366,3 +413,135 @@ async def test_exchange_close_called():
 
     # The critical assertion: exchange.close was awaited
     mock_ex.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Dtype coercion tests (C3)
+# ---------------------------------------------------------------------------
+
+
+def test_dtype_coercion_strings():
+    """String OHLCV values are coerced to float64."""
+    base_ts = int(pd.Timestamp("2024-01-01", tz="UTC").timestamp() * 1000)
+    day_ms = 86_400_000
+    ohlcv = [
+        [base_ts, "100.0", "110.0", "95.0", "105.0", "1000.0"],
+        [base_ts + day_ms, "101.0", "111.0", "96.0", "106.0", "1100.0"],
+    ]
+    df = ohlcv_to_dataframe(ohlcv)
+    for col in ["open", "high", "low", "close", "volume"]:
+        assert df[col].dtype == "float64", f"{col} should be float64, got {df[col].dtype}"
+    assert df.iloc[0]["close"] == 105.0
+
+
+def test_dtype_coercion_none():
+    """None values become NaN, columns stay float64."""
+    base_ts = int(pd.Timestamp("2024-01-01", tz="UTC").timestamp() * 1000)
+    day_ms = 86_400_000
+    ohlcv = [
+        [base_ts, 100.0, 110.0, 95.0, None, 1000.0],
+        [base_ts + day_ms, 101.0, None, 96.0, 106.0, 1100.0],
+    ]
+    df = ohlcv_to_dataframe(ohlcv)
+    for col in ["open", "high", "low", "close", "volume"]:
+        assert df[col].dtype == "float64", f"{col} should be float64, got {df[col].dtype}"
+    assert pd.isna(df.iloc[0]["close"])
+    assert pd.isna(df.iloc[1]["high"])
+
+
+def test_dtype_coercion_clean_data_unchanged():
+    """Valid numeric data passes through with same values."""
+    base_ts = int(pd.Timestamp("2024-01-01", tz="UTC").timestamp() * 1000)
+    day_ms = 86_400_000
+    ohlcv = [
+        [base_ts, 100.0, 110.0, 95.0, 105.0, 1000.0],
+        [base_ts + day_ms, 101.0, 111.0, 96.0, 106.0, 1100.0],
+    ]
+    df = ohlcv_to_dataframe(ohlcv)
+    assert df.iloc[0]["open"] == 100.0
+    assert df.iloc[1]["close"] == 106.0
+    assert df.iloc[0]["volume"] == 1000.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Days clamp test (H3)
+# ---------------------------------------------------------------------------
+
+
+def test_days_clamped_to_500(caplog):
+    """days=1000 logs warning and is clamped to 500."""
+    import logging
+    from quant_scanner.ingestion_engine import fetch_historical_data_multi
+
+    # We only need to verify the clamp logic, so we mock the internals
+    # to avoid actual API calls. The function should clamp before proceeding.
+    with caplog.at_level(logging.WARNING, logger="quant_scanner.ingestion_engine"):
+        import asyncio
+        # Calling with empty map will return {} immediately after the clamp
+        result = asyncio.get_event_loop().run_until_complete(
+            fetch_historical_data_multi({}, days=1000, use_cache=False)
+        )
+    assert "clamping to 500" in caplog.text
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Atomic cache write tests (C4)
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_cache_write_success(tmp_path):
+    """Normal atomic write produces valid JSON, no .tmp files left."""
+    from quant_scanner.ingestion_engine import _save_cache
+
+    cache_file = tmp_path / "coingecko_universe.json"
+
+    with patch("quant_scanner.ingestion_engine._CACHE_PATH", str(cache_file)):
+        _save_cache([{"symbol": "test", "market_cap": 1000}])
+
+    # Cache file should exist and be valid JSON
+    assert cache_file.exists()
+    with open(cache_file, encoding="utf-8") as f:
+        data = json.load(f)
+    assert len(data["coins"]) == 1
+    assert data["coins"][0]["symbol"] == "test"
+    # No .tmp files should remain
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert len(tmp_files) == 0
+
+
+def test_atomic_cache_write_failure_no_corrupt(tmp_path):
+    """Simulated json.dump failure leaves no cache file (clean state)."""
+    from quant_scanner.ingestion_engine import _save_cache
+
+    cache_file = tmp_path / "coingecko_universe.json"
+
+    with (
+        patch("quant_scanner.ingestion_engine._CACHE_PATH", str(cache_file)),
+        patch("quant_scanner.ingestion_engine.json.dump", side_effect=TypeError("boom")),
+        pytest.raises(TypeError),
+    ):
+        _save_cache([{"bad": "data"}])
+
+    # Cache file should NOT exist
+    assert not cache_file.exists()
+    # Temp file should have been cleaned up
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert len(tmp_files) == 0
+
+
+def test_atomic_ohlcv_cache_write(tmp_path):
+    """OHLCV cache uses the same atomic write pattern."""
+    from quant_scanner.ingestion_engine import _save_ohlcv_cache
+
+    with patch("quant_scanner.ingestion_engine._OHLCV_CACHE_DIR", str(tmp_path)):
+        _save_ohlcv_cache("BTC/USDT", [[1000, 100, 110, 95, 105, 1000]])
+
+    cache_file = tmp_path / "BTC_USDT.json"
+    assert cache_file.exists()
+    with open(cache_file, encoding="utf-8") as f:
+        data = json.load(f)
+    assert len(data["ohlcv"]) == 1
+    # No .tmp files should remain
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert len(tmp_files) == 0

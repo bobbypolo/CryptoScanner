@@ -368,3 +368,104 @@ def test_ws_endpoint_connects():
             with client.websocket_connect("/ws/updates") as ws:
                 # Connection established successfully
                 pass
+
+
+def test_ws_ping_sent():
+    """WebSocket client receives {"type": "ping"} within 35s.
+
+    We mock asyncio.sleep(30) to return immediately so the ping fires instantly.
+    """
+    from starlette.testclient import TestClient
+
+    with patch(
+        "quant_scanner.screener_engine.run_screen",
+        new_callable=AsyncMock,
+    ):
+        with patch("quant_scanner.server.asyncio.sleep", new_callable=AsyncMock, return_value=None):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/updates") as ws:
+                    data = ws.receive_json(mode="text")
+                    assert data == {"type": "ping"}
+
+
+def test_ws_disconnect_cleanup():
+    """Disconnect removes client from manager, ping task cancelled."""
+    from starlette.testclient import TestClient
+
+    with patch(
+        "quant_scanner.screener_engine.run_screen",
+        new_callable=AsyncMock,
+    ):
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/updates") as ws:
+                # Manager should have 1 client
+                assert app.state.ws_manager.client_count() >= 1
+            # After disconnect, client count should be back to 0
+            assert app.state.ws_manager.client_count() == 0
+
+
+def test_ws_broadcast_message():
+    """Manager.broadcast sends message to connected clients."""
+    from starlette.testclient import TestClient
+
+    with patch(
+        "quant_scanner.screener_engine.run_screen",
+        new_callable=AsyncMock,
+    ):
+        with patch("quant_scanner.server.asyncio.sleep", new_callable=AsyncMock, return_value=None):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/updates") as ws:
+                    # First receive the ping
+                    ping = ws.receive_json(mode="text")
+                    assert ping["type"] == "ping"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Template key tests (H5, M3)
+# ---------------------------------------------------------------------------
+
+
+async def test_volume_key_renders(client):
+    """Template renders volume_24h correctly (not 'N/A')."""
+    store = app.state.store
+    df = pd.DataFrame({
+        "symbol": ["TESTCOIN"],
+        "name": ["Test"],
+        "market_cap": [50_000_000.0],
+        "volume_24h": [5_000_000.0],
+        "beta": [1.5],
+        "correlation": [0.8],
+        "trend_score": [0.1],
+        "amihud": [1e-8],
+        "circulating_pct": [0.8],
+    })
+    await store.update(df)
+
+    response = await client.get("/partials/table")
+    assert response.status_code == 200
+    # volume_24h of 5M should render as "$5.0M", NOT "N/A"
+    assert "$5.0M" in response.text
+
+
+async def test_trend_score_no_fallback(client):
+    """Template uses trend_score key directly (no trend_pct fallback)."""
+    store = app.state.store
+    df = pd.DataFrame({
+        "symbol": ["TESTCOIN"],
+        "name": ["Test"],
+        "market_cap": [50_000_000.0],
+        "volume_24h": [5_000_000.0],
+        "beta": [1.5],
+        "correlation": [0.8],
+        "trend_score": [0.15],
+        "amihud": [1e-8],
+        "circulating_pct": [0.8],
+    })
+    await store.update(df)
+
+    response = await client.get("/partials/table")
+    assert response.status_code == 200
+    # trend_score 0.15 = 15.0%
+    assert "15.0%" in response.text
+    # Verify no "trend_pct" reference in the rendered template
+    assert "trend_pct" not in response.text

@@ -1,5 +1,6 @@
 """FastAPI application for the Crypto Quant Scanner dashboard."""
 
+import asyncio
 import logging
 import math
 import time
@@ -285,17 +286,28 @@ async def api_refresh(request: Request):
 async def ws_updates(websocket: WebSocket):
     """WebSocket endpoint for live push updates.
 
-    Accepts the connection via the manager, then loops receiving messages
-    (keep-alive). On disconnect, removes the client from the manager.
+    Sends a ping every 30s to keep the connection alive through proxies.
+    On disconnect, removes the client from the manager.
     """
     manager: ConnectionManager = websocket.app.state.ws_manager
     await manager.connect(websocket)
+
+    async def _ping_loop():
+        try:
+            while True:
+                await asyncio.sleep(30)
+                await websocket.send_json({"type": "ping"})
+        except Exception:
+            pass  # Client disconnected; main loop handles cleanup
+
+    ping_task = asyncio.create_task(_ping_loop())
     try:
         while True:
-            # Keep the connection alive by waiting for messages
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+    finally:
+        ping_task.cancel()
 
 
 @app.get("/api/health")

@@ -24,7 +24,7 @@ from quant_scanner.screener_engine import (
 
 _TEST_DF = pd.DataFrame(
     [
-        # Should PASS all filters
+        # Should PASS all filters (both old strict and new relaxed)
         {
             "symbol": "ALPHA/USDT",
             "name": "Alpha",
@@ -62,7 +62,7 @@ _TEST_DF = pd.DataFrame(
             "circulating_pct": float("nan"),
             "data_days": 45,
         },
-        # Beta too low (1.2 < 1.5) — EXCLUDED
+        # Beta=1.2 — passes new default (1.0) but fails old strict (1.5)
         {
             "symbol": "DELTA/USDT",
             "name": "Delta",
@@ -75,7 +75,20 @@ _TEST_DF = pd.DataFrame(
             "circulating_pct": 0.75,
             "data_days": 40,
         },
-        # Correlation too low (0.5 < 0.7) — EXCLUDED
+        # Beta too low (0.8 < 1.0) — EXCLUDED by new defaults
+        {
+            "symbol": "INDIA/USDT",
+            "name": "India",
+            "market_cap": 35_000_000,
+            "volume_24h": 3_000_000,
+            "beta": 0.8,
+            "correlation": 0.85,
+            "trend_score": 0.10,
+            "amihud": 2e-8,
+            "circulating_pct": 0.80,
+            "data_days": 45,
+        },
+        # Correlation too low (0.5 < 0.6) — EXCLUDED
         {
             "symbol": "ECHO/USDT",
             "name": "Echo",
@@ -145,12 +158,12 @@ class TestApplyFilters:
     """Tests for the apply_filters() function."""
 
     def test_low_beta_excluded(self) -> None:
-        """DELTA (beta=1.2 < 1.5) must be excluded from results."""
+        """INDIA (beta=0.8 < 1.0) must be excluded from results."""
         result = _filtered()
-        assert "DELTA/USDT" not in result["symbol"].values
+        assert "INDIA/USDT" not in result["symbol"].values
 
     def test_low_correlation_excluded(self) -> None:
-        """ECHO (correlation=0.5 < 0.7) must be excluded from results."""
+        """ECHO (correlation=0.5 < 0.6) must be excluded from results."""
         result = _filtered()
         assert "ECHO/USDT" not in result["symbol"].values
 
@@ -175,7 +188,9 @@ class TestApplyFilters:
     def test_sorted_by_beta_descending(self) -> None:
         """Output must be sorted by beta descending.
 
-        Expected order: ALPHA (2.5), CHARLIE (2.0), BRAVO (1.8), HOTEL (1.7).
+        With new defaults (min_beta=1.0, min_corr=0.6), DELTA (beta=1.2)
+        now passes. Expected order: ALPHA (2.5), CHARLIE (2.0), BRAVO (1.8),
+        HOTEL (1.7), DELTA (1.2).
         """
         result = _filtered()
         betas = result["beta"].tolist()
@@ -186,6 +201,7 @@ class TestApplyFilters:
             "CHARLIE/USDT", # beta=2.0
             "BRAVO/USDT",   # beta=1.8
             "HOTEL/USDT",   # beta=1.7
+            "DELTA/USDT",   # beta=1.2
         ]
         assert result["symbol"].tolist() == expected_symbols
 
@@ -203,8 +219,8 @@ class TestApplyFilters:
     def test_high_amihud_excluded(self) -> None:
         """Coin with Amihud above threshold is excluded."""
         df = _TEST_DF.copy()
-        # Set ALPHA's amihud above default threshold (5e-7)
-        df.loc[df["symbol"] == "ALPHA/USDT", "amihud"] = 1e-6
+        # Set ALPHA's amihud above default threshold (1e-5)
+        df.loc[df["symbol"] == "ALPHA/USDT", "amihud"] = 5e-5
         result = apply_filters(df)
         assert "ALPHA/USDT" not in result["symbol"].values
 
@@ -716,3 +732,67 @@ class TestPriceSanityFilter:
         assert "ALPHA/USDT" in filtered_ohlcv
         assert "BRAVO/USDT" not in filtered_ohlcv
         assert "BTC/USDT" in filtered_ohlcv  # BTC always preserved
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: New default and filter logging tests
+# ---------------------------------------------------------------------------
+
+
+class TestNewDefaults:
+    """Verify recalibrated threshold defaults."""
+
+    def test_new_defaults_pass_moderate_coins(self) -> None:
+        """Coin with beta=1.1, corr=0.65, amihud=5e-6 passes default filters."""
+        df = pd.DataFrame([{
+            "symbol": "MODERATE/USDT",
+            "name": "Moderate",
+            "market_cap": 50_000_000,
+            "volume_24h": 2_000_000,
+            "beta": 1.1,
+            "correlation": 0.65,
+            "trend_score": 0.05,
+            "amihud": 5e-6,
+            "circulating_pct": 0.80,
+            "data_days": 40,
+        }])
+        result = apply_filters(df)
+        assert "MODERATE/USDT" in result["symbol"].values
+
+    def test_explicit_old_thresholds_still_work(self) -> None:
+        """apply_filters(df, min_beta=1.5) still filters beta=1.2 coins."""
+        df = pd.DataFrame([{
+            "symbol": "LOWBETA/USDT",
+            "name": "LowBeta",
+            "market_cap": 50_000_000,
+            "volume_24h": 2_000_000,
+            "beta": 1.2,
+            "correlation": 0.85,
+            "trend_score": 0.10,
+            "amihud": 1e-8,
+            "circulating_pct": 0.80,
+            "data_days": 40,
+        }])
+        result = apply_filters(df, min_beta=1.5)
+        assert "LOWBETA/USDT" not in result["symbol"].values
+
+    def test_filter_drop_logging(self, caplog) -> None:
+        """Each filter step emits INFO log with counts."""
+        import logging
+        with caplog.at_level(logging.INFO, logger="quant_scanner.screener_engine"):
+            _filtered()
+        # Verify filter drop messages are logged
+        assert "Filter data_days>=20:" in caplog.text
+        assert "Filter beta>" in caplog.text
+        assert "Filter corr>" in caplog.text
+        assert "Filter vol>" in caplog.text
+        assert "Filter supply>" in caplog.text
+        assert "Filter amihud<=" in caplog.text
+
+    def test_exchange_id_case_insensitive(self) -> None:
+        """'KuCoin' is normalized to 'kucoin' in exchange ID parsing."""
+        # We test this via the exchange_ids parsing in run_screen,
+        # but we can verify the string split logic directly
+        exchange_id = "KuCoin, OKX, Gate"
+        exchange_ids = [x.strip().lower() for x in exchange_id.split(",")]
+        assert exchange_ids == ["kucoin", "okx", "gate"]
