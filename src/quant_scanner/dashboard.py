@@ -13,12 +13,12 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
 
     Columns:
         Rank | Symbol | Name | Market Cap | 24h Volume |
-        Beta | Correlation | Kelly % | Circ. Supply %
+        Beta | Correlation | Trend % | Amihud | Circ. Supply %
 
     Color rules:
         Beta:        > 2.0 -> bold green, 1.5-2.0 -> yellow
         Correlation: > 0.85 -> bold green, 0.7-0.85 -> yellow
-        Kelly:       > 0.15 -> bold green, > 0 -> yellow, 0 -> dim
+        Trend:       > 0.15 -> bold green, > 0 -> yellow, 0 -> dim
     """
     if console is None:
         console = Console()
@@ -32,7 +32,8 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
     table.add_column("24h Volume", justify="right")
     table.add_column("Beta", justify="right")
     table.add_column("Correlation", justify="right")
-    table.add_column("Kelly %", justify="right")
+    table.add_column("Trend %", justify="right")
+    table.add_column("Amihud", justify="right")
     table.add_column("Circ. Supply %", justify="right")
 
     for rank, (_, row) in enumerate(results.iterrows(), start=1):
@@ -60,16 +61,25 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
         else:
             corr_style = ""
 
-        # Format kelly as percentage with color
-        kelly_val = row["kelly_fraction"]
-        kelly_pct = kelly_val * 100
-        kelly_str = f"{kelly_pct:.1f}%"
-        if kelly_val > 0.15:
-            kelly_style = "bold green"
-        elif kelly_val > 0:
-            kelly_style = "yellow"
+        # Format trend score as percentage with color
+        trend_val = row["trend_score"]
+        trend_pct = trend_val * 100
+        trend_str = f"{trend_pct:.1f}%"
+        if trend_val > 0.15:
+            trend_style = "bold green"
+        elif trend_val > 0:
+            trend_style = "yellow"
         else:
-            kelly_style = "dim"
+            trend_style = "dim"
+
+        # Format Amihud illiquidity with color
+        amihud_val = row.get("amihud")
+        if pd.isna(amihud_val) or amihud_val is None:
+            amihud_str = "N/A"
+            amihud_style = ""
+        else:
+            amihud_str = f"{amihud_val:.1e}"
+            amihud_style = "yellow" if amihud_val > 1e-7 else ""
 
         # Format circulating supply percentage
         circ_val = row["circulating_pct"]
@@ -86,7 +96,8 @@ def render_results(results: pd.DataFrame, console: Console | None = None) -> Non
             volume_str,
             f"[{beta_style}]{beta_str}[/{beta_style}]" if beta_style else beta_str,
             f"[{corr_style}]{corr_str}[/{corr_style}]" if corr_style else corr_str,
-            f"[{kelly_style}]{kelly_str}[/{kelly_style}]" if kelly_style else kelly_str,
+            f"[{trend_style}]{trend_str}[/{trend_style}]" if trend_style else trend_str,
+            f"[{amihud_style}]{amihud_str}[/{amihud_style}]" if amihud_style else amihud_str,
             circ_str,
         )
 

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -117,14 +118,24 @@ def _load_cache(cache_ttl_hours: int) -> list[dict] | None:
 
 
 def _save_cache(coins: list[dict]) -> None:
-    """Persist fetched coins to the cache file."""
-    os.makedirs("cache", exist_ok=True)
+    """Persist fetched coins to the cache file (atomic write)."""
+    cache_dir = os.path.dirname(_CACHE_PATH) or "cache"
+    os.makedirs(cache_dir, exist_ok=True)
     payload = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "coins": coins,
     }
-    with open(_CACHE_PATH, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+    fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp_path, _CACHE_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     logger.info("Saved %d coins to cache", len(coins))
 
 
@@ -245,7 +256,7 @@ def _load_ohlcv_cache(symbol: str) -> list[list] | None:
 
 
 def _save_ohlcv_cache(symbol: str, ohlcv: list[list]) -> None:
-    """Persist raw OHLCV data for *symbol* to disk."""
+    """Persist raw OHLCV data for *symbol* to disk (atomic write)."""
     os.makedirs(_OHLCV_CACHE_DIR, exist_ok=True)
     safe_name = _symbol_to_cache_filename(symbol)
     path = os.path.join(_OHLCV_CACHE_DIR, f"{safe_name}.json")
@@ -253,8 +264,17 @@ def _save_ohlcv_cache(symbol: str, ohlcv: list[list]) -> None:
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "ohlcv": ohlcv,
     }
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+    fd, tmp_path = tempfile.mkstemp(dir=_OHLCV_CACHE_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     logger.info("Saved OHLCV cache for %s", symbol)
 
 
@@ -284,6 +304,11 @@ def ohlcv_to_dataframe(ohlcv: list[list]) -> pd.DataFrame:
     )
     df.index = pd.to_datetime(timestamps, unit="ms", utc=True)
     df = df.drop(columns=["timestamp"])
+    # Some exchanges (e.g. Kraken) return duplicate timestamps — keep last
+    df = df[~df.index.duplicated(keep="last")]
+    # Coerce all OHLCV columns to float64; non-numeric values become NaN
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -366,7 +391,11 @@ def align_to_btc_index(
     btc_df: pd.DataFrame,
     alt_dfs: dict[str, pd.DataFrame],
 ) -> dict[str, pd.DataFrame]:
-    """Reindex all altcoin DataFrames to BTC's DatetimeIndex, then forward-fill.
+    """Reindex all altcoin DataFrames to BTC's DatetimeIndex.
+
+    Missing dates stay NaN — no forward-fill. pct_change() will produce NaN
+    at gap boundaries, and rolling calculations (min_periods=20) skip NaN
+    automatically. This avoids synthetic 0% returns that dilute Beta/Correlation.
 
     Parameters
     ----------
@@ -378,12 +407,14 @@ def align_to_btc_index(
     Returns
     -------
     dict[str, pd.DataFrame]
-        Same mapping with DataFrames reindexed and forward-filled (limit=3).
+        Same mapping with DataFrames reindexed to BTC's index (NaN at gaps).
     """
     aligned: dict[str, pd.DataFrame] = {}
     for symbol, df in alt_dfs.items():
+        # Guard against duplicate timestamps from exchange APIs or cached data
+        if df.index.duplicated().any():
+            df = df[~df.index.duplicated(keep="last")]
         reindexed = df.reindex(btc_df.index)
-        reindexed = reindexed.ffill(limit=3)
         aligned[symbol] = reindexed
     return aligned
 
@@ -513,6 +544,10 @@ async def fetch_historical_data_multi(
         Same format as :func:`fetch_historical_data`: symbol to DataFrame.
         ``"BTC/USDT"`` always included. Altcoins aligned to BTC index.
     """
+    if days > 500:
+        logger.warning("days=%d exceeds exchange limits, clamping to 500", days)
+        days = 500
+
     # Group symbols by exchange
     exchange_symbols: dict[str, list[str]] = defaultdict(list)
     for symbol, ex_id in symbol_exchange_map.items():
@@ -630,8 +665,12 @@ async def fetch_historical_data(
     dict[str, pd.DataFrame]
         Mapping of symbol (e.g. ``"RENDER/USDT"``) to DataFrame.
         ``"BTC/USDT"`` is always included. All altcoin DataFrames are
-        aligned to BTC's DatetimeIndex with forward-fill (limit=3).
+        aligned to BTC's DatetimeIndex (NaN at gaps).
     """
+    if days > 500:
+        logger.warning("days=%d exceeds exchange limits, clamping to 500", days)
+        days = 500
+
     # Ensure BTC/USDT is first and only appears once
     all_symbols = ["BTC/USDT"] + [s for s in symbols if s != "BTC/USDT"]
 

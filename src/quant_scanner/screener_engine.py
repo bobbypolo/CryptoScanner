@@ -31,10 +31,74 @@ _OUTPUT_COLUMNS = [
     "volume_24h",
     "beta",
     "correlation",
-    "kelly_fraction",
+    "trend_score",
+    "amihud",
     "circulating_pct",
     "data_days",
 ]
+
+
+def price_sanity_filter(
+    coins: list[dict],
+    ohlcv_data: dict[str, pd.DataFrame],
+    max_divergence: float = 0.15,
+) -> tuple[list[dict], dict[str, pd.DataFrame]]:
+    """Drop coins where CoinGecko price diverges >15% from OHLCV last close.
+
+    Called BEFORE compute_all_metrics to avoid wasting CPU on garbage data.
+    Returns filtered (coins, ohlcv_data) with divergent symbols removed from both.
+    BTC/USDT is always preserved in ohlcv_data (it's the baseline).
+    """
+    # Build lookup: CG symbol (lowercase) → current_price
+    cg_prices: dict[str, float | None] = {}
+    for coin in coins:
+        raw_sym = coin.get("symbol", "")
+        ccxt_symbol = raw_sym.upper() + "/USDT"
+        cg_prices[ccxt_symbol] = coin.get("current_price")
+
+    # Identify symbols to drop
+    symbols_to_drop: set[str] = set()
+    for symbol, df in ohlcv_data.items():
+        if symbol == "BTC/USDT":
+            continue
+
+        cg_price = cg_prices.get(symbol)
+
+        # Fail-open: if CG price is None/0 or OHLCV is empty, keep the coin
+        if cg_price is None or cg_price == 0:
+            continue
+        if df.empty or "close" not in df.columns:
+            continue
+
+        last_close = df["close"].iloc[-1]
+        if last_close is None or last_close == 0:
+            continue
+
+        try:
+            divergence = abs(cg_price - last_close) / cg_price
+        except (TypeError, ZeroDivisionError):
+            continue
+
+        if divergence > max_divergence:
+            logger.warning(
+                "Price sanity check failed for %s: CG=%.4f, OHLCV=%.4f, divergence=%.1f%% — dropping",
+                symbol, cg_price, last_close, divergence * 100,
+            )
+            symbols_to_drop.add(symbol)
+
+    if not symbols_to_drop:
+        return coins, ohlcv_data
+
+    # Filter ohlcv_data
+    filtered_ohlcv = {k: v for k, v in ohlcv_data.items() if k not in symbols_to_drop}
+
+    # Filter coins list: remove coins whose CCXT symbol was dropped
+    dropped_cg_symbols = {s.split("/")[0].lower() for s in symbols_to_drop}
+    filtered_coins = [
+        c for c in coins if c.get("symbol", "").lower() not in dropped_cg_symbols
+    ]
+
+    return filtered_coins, filtered_ohlcv
 
 
 def merge_metadata(
@@ -52,13 +116,13 @@ def merge_metadata(
     metrics : pd.DataFrame
         Output of compute_all_metrics() with columns:
         symbol (e.g. "RENDER/USDT"), beta, correlation,
-        kelly_fraction, data_days.
+        trend_score, data_days.
 
     Returns
     -------
     pd.DataFrame
         Merged DataFrame with columns: symbol, name, market_cap,
-        volume_24h, beta, correlation, kelly_fraction,
+        volume_24h, beta, correlation, trend_score,
         circulating_pct, data_days.
     """
     # Build a lookup from CCXT-style symbol ("RENDER/USDT") to CG metadata
@@ -103,7 +167,8 @@ def merge_metadata(
                 "volume_24h": meta.get("volume_24h"),
                 "beta": row["beta"],
                 "correlation": row["correlation"],
-                "kelly_fraction": row["kelly_fraction"],
+                "trend_score": row["trend_score"],
+                "amihud": row.get("amihud", np.nan),
                 "circulating_pct": meta.get("circulating_pct", np.nan),
                 "data_days": row["data_days"],
             }
@@ -117,10 +182,11 @@ def merge_metadata(
 
 def apply_filters(
     df: pd.DataFrame,
-    min_beta: float = 1.5,
-    min_correlation: float = 0.7,
+    min_beta: float = 1.0,
+    min_correlation: float = 0.6,
     min_volume: float = 1_000_000,
     min_supply_pct: float = 0.70,
+    max_amihud: float = 1e-5,
 ) -> pd.DataFrame:
     """Apply the screening filters in order and sort by beta descending.
 
@@ -130,6 +196,8 @@ def apply_filters(
         3. correlation > min_correlation
         4. volume_24h > min_volume
         5. circulating_pct > min_supply_pct ONLY where not NaN
+           (NaN rows PASS this filter)
+        6. amihud <= max_amihud ONLY where not NaN
            (NaN rows PASS this filter)
 
     Returns
@@ -143,23 +211,40 @@ def apply_filters(
     result = df.copy()
 
     # 1. data_days >= 20
+    prev = len(result)
     result = result[result["data_days"] >= 20]
+    logger.info("Filter data_days>=20: %d → %d (-%d)", prev, len(result), prev - len(result))
 
     # 2. beta > min_beta
+    prev = len(result)
     result = result[result["beta"] > min_beta]
+    logger.info("Filter beta>%.2f: %d → %d (-%d)", min_beta, prev, len(result), prev - len(result))
 
     # 3. correlation > min_correlation
+    prev = len(result)
     result = result[result["correlation"] > min_correlation]
+    logger.info("Filter corr>%.2f: %d → %d (-%d)", min_correlation, prev, len(result), prev - len(result))
 
     # 4. volume_24h > min_volume
+    prev = len(result)
     result = result[result["volume_24h"] > min_volume]
+    logger.info("Filter vol>%.0f: %d → %d (-%d)", min_volume, prev, len(result), prev - len(result))
 
     # 5. circulating_pct > min_supply_pct ONLY where not NaN
     #    NaN rows pass this filter
+    prev = len(result)
     supply_mask = result["circulating_pct"].isna() | (
         result["circulating_pct"] > min_supply_pct
     )
     result = result[supply_mask]
+    logger.info("Filter supply>%.0f%%: %d → %d (-%d)", min_supply_pct * 100, prev, len(result), prev - len(result))
+
+    # 6. amihud <= max_amihud ONLY where not NaN
+    #    NaN rows pass this filter (same pattern as circulating_pct)
+    prev = len(result)
+    amihud_mask = result["amihud"].isna() | (result["amihud"] <= max_amihud)
+    result = result[amihud_mask]
+    logger.info("Filter amihud<=%.1e: %d → %d (-%d)", max_amihud, prev, len(result), prev - len(result))
 
     # Sort by beta descending
     result = result.sort_values("beta", ascending=False).reset_index(drop=True)
@@ -171,10 +256,11 @@ async def run_screen(
     exchange_id: str = "kucoin,okx,gate",
     min_mcap: float = 20_000_000,
     max_mcap: float = 150_000_000,
-    min_beta: float = 1.5,
-    min_correlation: float = 0.7,
+    min_beta: float = 1.0,
+    min_correlation: float = 0.6,
     min_volume: float = 1_000_000,
     min_supply_pct: float = 0.70,
+    max_amihud: float = 1e-5,
     days: int = 60,
     use_cache: bool = True,
 ) -> pd.DataFrame:
@@ -190,7 +276,7 @@ async def run_screen(
         2. Load markets from all exchanges (skip failures with warning)
         3. map_coingecko_to_ccxt_multi() -- symbol validation across exchanges
         4. fetch_historical_data_multi() -- 60-day OHLCV + BTC baseline
-        5. compute_all_metrics() -- Beta, Correlation, Kelly per coin
+        5. compute_all_metrics() -- Beta, Correlation, Trend Score per coin
         6. merge_metadata() -- join CG metadata with math output
         7. apply_filters() -- final sieve + sort by Beta descending
 
@@ -198,12 +284,12 @@ async def run_screen(
     -------
     pd.DataFrame
         Filtered results with columns: symbol, name, market_cap,
-        volume_24h, beta, correlation, kelly_fraction,
+        volume_24h, beta, correlation, trend_score,
         circulating_pct, data_days.
         Returns empty DataFrame if nothing passes filters.
     """
     # Parse comma-separated exchange IDs
-    exchange_ids = [x.strip() for x in exchange_id.split(",")]
+    exchange_ids = [x.strip().lower() for x in exchange_id.split(",")]
 
     # Step 1: Fetch universe from CoinGecko
     coins = await fetch_universe(
@@ -263,7 +349,14 @@ async def run_screen(
         logger.warning("No OHLCV data returned")
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
-    # Step 5: Compute all metrics (Beta, Correlation, Kelly)
+    # Step 4.5: Price sanity filter — drop symbol collisions BEFORE math
+    coins, ohlcv_data = price_sanity_filter(coins, ohlcv_data)
+
+    if len(ohlcv_data) <= 1:  # only BTC/USDT left
+        logger.warning("All coins dropped by price sanity filter")
+        return pd.DataFrame(columns=_OUTPUT_COLUMNS)
+
+    # Step 5: Compute all metrics (Beta, Correlation, Trend Score, Amihud)
     metrics = compute_all_metrics(ohlcv_data)
 
     if metrics.empty:
@@ -280,6 +373,7 @@ async def run_screen(
         min_correlation=min_correlation,
         min_volume=min_volume,
         min_supply_pct=min_supply_pct,
+        max_amihud=max_amihud,
     )
 
     logger.info(

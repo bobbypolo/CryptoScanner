@@ -1,5 +1,6 @@
 """FastAPI application for the Crypto Quant Scanner dashboard."""
 
+import asyncio
 import logging
 import math
 import time
@@ -110,12 +111,24 @@ def format_beta(value) -> str:
     return f"{v:.2f}"
 
 
+def format_amihud(value) -> str:
+    """Format Amihud ratio: 1.2e-8 -> '1.2e-08', None/NaN -> 'N/A'."""
+    if value is None or _is_nan(value):
+        return "N/A"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{v:.1e}"
+
+
 # Register filters on the Jinja2 environment
 if templates is not None:
     templates.env.filters["format_mcap"] = format_mcap
     templates.env.filters["format_volume"] = format_volume
     templates.env.filters["format_pct"] = format_pct
     templates.env.filters["format_beta"] = format_beta
+    templates.env.filters["format_amihud"] = format_amihud
 
 
 # ---------------------------------------------------------------------------
@@ -273,17 +286,28 @@ async def api_refresh(request: Request):
 async def ws_updates(websocket: WebSocket):
     """WebSocket endpoint for live push updates.
 
-    Accepts the connection via the manager, then loops receiving messages
-    (keep-alive). On disconnect, removes the client from the manager.
+    Sends a ping every 30s to keep the connection alive through proxies.
+    On disconnect, removes the client from the manager.
     """
     manager: ConnectionManager = websocket.app.state.ws_manager
     await manager.connect(websocket)
+
+    async def _ping_loop():
+        try:
+            while True:
+                await asyncio.sleep(30)
+                await websocket.send_json({"type": "ping"})
+        except Exception:
+            pass  # Client disconnected; main loop handles cleanup
+
+    ping_task = asyncio.create_task(_ping_loop())
     try:
         while True:
-            # Keep the connection alive by waiting for messages
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+    finally:
+        ping_task.cancel()
 
 
 @app.get("/api/health")

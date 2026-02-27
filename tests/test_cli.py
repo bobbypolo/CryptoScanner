@@ -1,4 +1,7 @@
+import inspect
+
 from quant_scanner.cli import parse_args
+from quant_scanner.screener_engine import apply_filters
 
 
 def test_dry_run_flag():
@@ -12,9 +15,10 @@ def test_default_args():
     assert args.exchange == "kucoin,okx,gate"
     assert args.min_mcap == 20_000_000
     assert args.max_mcap == 150_000_000
-    assert args.min_beta == 1.5
-    assert args.min_corr == 0.7
+    assert args.min_beta == 1.0
+    assert args.min_corr == 0.6
     assert args.min_volume == 1_000_000
+    assert args.max_amihud == 1e-5
     assert args.no_cache is False
 
 
@@ -48,3 +52,12 @@ def test_refresh_interval_flag():
 
 def test_default_refresh_interval():
     assert parse_args([]).refresh_interval == 300
+
+
+def test_cli_defaults_match_screener():
+    """CLI default values match apply_filters signature defaults."""
+    args = parse_args([])
+    sig = inspect.signature(apply_filters)
+    assert args.min_beta == sig.parameters["min_beta"].default
+    assert args.min_corr == sig.parameters["min_correlation"].default
+    assert args.max_amihud == sig.parameters["max_amihud"].default

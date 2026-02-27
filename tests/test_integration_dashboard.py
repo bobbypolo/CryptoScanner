@@ -35,7 +35,8 @@ def make_scan_df(n: int = 3) -> pd.DataFrame:
             "volume_24h": 5_000_000,
             "beta": 2.5 - i * 0.3,
             "correlation": 0.9 - i * 0.05,
-            "kelly_fraction": 0.15 - i * 0.03,
+            "trend_score": 0.15 - i * 0.03,
+            "amihud": 1e-8 + i * 1e-9,
             "circulating_pct": 0.8 if i % 2 == 0 else float("nan"),
             "data_days": 59,
         }
@@ -184,7 +185,7 @@ async def test_empty_scan_result():
     _server_config["interval_seconds"] = 9999
     empty_df = pd.DataFrame(columns=[
         "symbol", "name", "market_cap", "volume_24h", "beta",
-        "correlation", "kelly_fraction", "circulating_pct", "data_days",
+        "correlation", "trend_score", "amihud", "circulating_pct", "data_days",
     ])
 
     with patch(_PATCH_TARGET, new_callable=AsyncMock, return_value=empty_df):

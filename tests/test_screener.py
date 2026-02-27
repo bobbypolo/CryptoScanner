@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quant_scanner.screener_engine import apply_filters, merge_metadata, run_screen
+from quant_scanner.screener_engine import (
+    apply_filters,
+    merge_metadata,
+    price_sanity_filter,
+    run_screen,
+)
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -19,7 +24,7 @@ from quant_scanner.screener_engine import apply_filters, merge_metadata, run_scr
 
 _TEST_DF = pd.DataFrame(
     [
-        # Should PASS all filters
+        # Should PASS all filters (both old strict and new relaxed)
         {
             "symbol": "ALPHA/USDT",
             "name": "Alpha",
@@ -27,7 +32,8 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 5_000_000,
             "beta": 2.5,
             "correlation": 0.9,
-            "kelly_fraction": 0.15,
+            "trend_score": 0.15,
+            "amihud": 1e-8,
             "circulating_pct": 0.80,
             "data_days": 55,
         },
@@ -38,7 +44,8 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 3_000_000,
             "beta": 1.8,
             "correlation": 0.75,
-            "kelly_fraction": 0.10,
+            "trend_score": 0.10,
+            "amihud": 2e-8,
             "circulating_pct": 0.85,
             "data_days": 50,
         },
@@ -50,11 +57,12 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 2_000_000,
             "beta": 2.0,
             "correlation": 0.80,
-            "kelly_fraction": 0.08,
+            "trend_score": 0.08,
+            "amihud": 5e-8,
             "circulating_pct": float("nan"),
             "data_days": 45,
         },
-        # Beta too low (1.2 < 1.5) — EXCLUDED
+        # Beta=1.2 — passes new default (1.0) but fails old strict (1.5)
         {
             "symbol": "DELTA/USDT",
             "name": "Delta",
@@ -62,11 +70,25 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 4_000_000,
             "beta": 1.2,
             "correlation": 0.85,
-            "kelly_fraction": 0.12,
+            "trend_score": 0.12,
+            "amihud": 3e-8,
             "circulating_pct": 0.75,
             "data_days": 40,
         },
-        # Correlation too low (0.5 < 0.7) — EXCLUDED
+        # Beta too low (0.8 < 1.0) — EXCLUDED by new defaults
+        {
+            "symbol": "INDIA/USDT",
+            "name": "India",
+            "market_cap": 35_000_000,
+            "volume_24h": 3_000_000,
+            "beta": 0.8,
+            "correlation": 0.85,
+            "trend_score": 0.10,
+            "amihud": 2e-8,
+            "circulating_pct": 0.80,
+            "data_days": 45,
+        },
+        # Correlation too low (0.5 < 0.6) — EXCLUDED
         {
             "symbol": "ECHO/USDT",
             "name": "Echo",
@@ -74,7 +96,8 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 6_000_000,
             "beta": 2.0,
             "correlation": 0.5,
-            "kelly_fraction": 0.11,
+            "trend_score": 0.11,
+            "amihud": 4e-8,
             "circulating_pct": 0.90,
             "data_days": 50,
         },
@@ -86,7 +109,8 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 500_000,
             "beta": 1.9,
             "correlation": 0.88,
-            "kelly_fraction": 0.09,
+            "trend_score": 0.09,
+            "amihud": 6e-8,
             "circulating_pct": 0.72,
             "data_days": 55,
         },
@@ -98,7 +122,8 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 2_500_000,
             "beta": 2.1,
             "correlation": 0.82,
-            "kelly_fraction": 0.07,
+            "trend_score": 0.07,
+            "amihud": 7e-8,
             "circulating_pct": 0.88,
             "data_days": 15,
         },
@@ -110,7 +135,8 @@ _TEST_DF = pd.DataFrame(
             "volume_24h": 1_500_000,
             "beta": 1.7,
             "correlation": 0.78,
-            "kelly_fraction": 0.06,
+            "trend_score": 0.06,
+            "amihud": 8e-8,
             "circulating_pct": float("nan"),
             "data_days": 40,
         },
@@ -132,12 +158,12 @@ class TestApplyFilters:
     """Tests for the apply_filters() function."""
 
     def test_low_beta_excluded(self) -> None:
-        """DELTA (beta=1.2 < 1.5) must be excluded from results."""
+        """INDIA (beta=0.8 < 1.0) must be excluded from results."""
         result = _filtered()
-        assert "DELTA/USDT" not in result["symbol"].values
+        assert "INDIA/USDT" not in result["symbol"].values
 
     def test_low_correlation_excluded(self) -> None:
-        """ECHO (correlation=0.5 < 0.7) must be excluded from results."""
+        """ECHO (correlation=0.5 < 0.6) must be excluded from results."""
         result = _filtered()
         assert "ECHO/USDT" not in result["symbol"].values
 
@@ -162,7 +188,9 @@ class TestApplyFilters:
     def test_sorted_by_beta_descending(self) -> None:
         """Output must be sorted by beta descending.
 
-        Expected order: ALPHA (2.5), CHARLIE (2.0), BRAVO (1.8), HOTEL (1.7).
+        With new defaults (min_beta=1.0, min_corr=0.6), DELTA (beta=1.2)
+        now passes. Expected order: ALPHA (2.5), CHARLIE (2.0), BRAVO (1.8),
+        HOTEL (1.7), DELTA (1.2).
         """
         result = _filtered()
         betas = result["beta"].tolist()
@@ -173,6 +201,7 @@ class TestApplyFilters:
             "CHARLIE/USDT", # beta=2.0
             "BRAVO/USDT",   # beta=1.8
             "HOTEL/USDT",   # beta=1.7
+            "DELTA/USDT",   # beta=1.2
         ]
         assert result["symbol"].tolist() == expected_symbols
 
@@ -187,6 +216,21 @@ class TestApplyFilters:
         result = apply_filters(_TEST_DF.copy(), min_beta=100.0)
         assert result.empty
 
+    def test_high_amihud_excluded(self) -> None:
+        """Coin with Amihud above threshold is excluded."""
+        df = _TEST_DF.copy()
+        # Set ALPHA's amihud above default threshold (1e-5)
+        df.loc[df["symbol"] == "ALPHA/USDT", "amihud"] = 5e-5
+        result = apply_filters(df)
+        assert "ALPHA/USDT" not in result["symbol"].values
+
+    def test_nan_amihud_not_excluded(self) -> None:
+        """Coin with NaN Amihud must NOT be excluded (fail-open)."""
+        df = _TEST_DF.copy()
+        df.loc[df["symbol"] == "ALPHA/USDT", "amihud"] = float("nan")
+        result = apply_filters(df)
+        assert "ALPHA/USDT" in result["symbol"].values
+
     def test_output_columns(self) -> None:
         """Result must have exactly the expected output columns."""
         result = _filtered()
@@ -197,7 +241,8 @@ class TestApplyFilters:
             "volume_24h",
             "beta",
             "correlation",
-            "kelly_fraction",
+            "trend_score",
+            "amihud",
             "circulating_pct",
             "data_days",
         ]
@@ -231,7 +276,8 @@ class TestMergeMetadata:
                     "symbol": "HOTEL/USDT",
                     "beta": 1.7,
                     "correlation": 0.78,
-                    "kelly_fraction": 0.06,
+                    "trend_score": 0.06,
+                    "amihud": 1e-8,
                     "data_days": 40,
                 },
             ]
@@ -262,7 +308,8 @@ class TestMergeMetadata:
                     "symbol": "XTOKEN/USDT",
                     "beta": 1.9,
                     "correlation": 0.81,
-                    "kelly_fraction": 0.10,
+                    "trend_score": 0.10,
+                    "amihud": 1e-8,
                     "data_days": 50,
                 },
             ]
@@ -289,7 +336,8 @@ class TestMergeMetadata:
                     "symbol": "YTOKEN/USDT",
                     "beta": 2.1,
                     "correlation": 0.85,
-                    "kelly_fraction": 0.12,
+                    "trend_score": 0.12,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
             ]
@@ -316,7 +364,8 @@ class TestMergeMetadata:
                     "symbol": "ALPHA/USDT",
                     "beta": 2.5,
                     "correlation": 0.9,
-                    "kelly_fraction": 0.15,
+                    "trend_score": 0.15,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
             ]
@@ -343,7 +392,8 @@ class TestMergeMetadata:
                     "symbol": "BRAVO/USDT",
                     "beta": 1.8,
                     "correlation": 0.75,
-                    "kelly_fraction": 0.10,
+                    "trend_score": 0.10,
+                    "amihud": 1e-8,
                     "data_days": 50,
                 },
             ]
@@ -379,14 +429,16 @@ class TestMergeMetadata:
                     "symbol": "ALPHA/USDT",
                     "beta": 2.5,
                     "correlation": 0.9,
-                    "kelly_fraction": 0.15,
+                    "trend_score": 0.15,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
                 {
                     "symbol": "BRAVO/USDT",
                     "beta": 1.8,
                     "correlation": 0.75,
-                    "kelly_fraction": 0.10,
+                    "trend_score": 0.10,
+                    "amihud": 1e-8,
                     "data_days": 50,
                 },
             ]
@@ -410,7 +462,7 @@ class TestMergeMetadata:
             },
         ]
         metrics = pd.DataFrame(
-            columns=["symbol", "beta", "correlation", "kelly_fraction", "data_days"]
+            columns=["symbol", "beta", "correlation", "trend_score", "amihud", "data_days"]
         )
         result = merge_metadata(coins, metrics)
         assert result.empty
@@ -436,6 +488,7 @@ class TestRunScreen:
                 "circulating_supply": 80_000_000,
                 "total_supply": 100_000_000,
                 "market_cap_rank": 100,
+                "current_price": 3.0,
             },
             {
                 "symbol": "bravo",
@@ -445,6 +498,7 @@ class TestRunScreen:
                 "circulating_supply": 85_000_000,
                 "total_supply": 100_000_000,
                 "market_cap_rank": 120,
+                "current_price": 0.8,
             },
         ]
 
@@ -473,14 +527,16 @@ class TestRunScreen:
                     "symbol": "ALPHA/USDT",
                     "beta": 2.5,
                     "correlation": 0.9,
-                    "kelly_fraction": 0.15,
+                    "trend_score": 0.15,
+                    "amihud": 1e-8,
                     "data_days": 55,
                 },
                 {
                     "symbol": "BRAVO/USDT",
                     "beta": 1.8,
                     "correlation": 0.75,
-                    "kelly_fraction": 0.10,
+                    "trend_score": 0.10,
+                    "amihud": 2e-8,
                     "data_days": 50,
                 },
             ]
@@ -589,3 +645,154 @@ class TestRunScreen:
             result = await run_screen()
 
         assert result.empty
+
+
+# ---------------------------------------------------------------------------
+# price_sanity_filter tests
+# ---------------------------------------------------------------------------
+
+
+class TestPriceSanityFilter:
+    """Tests for the price_sanity_filter() function."""
+
+    def _make_coins(self, symbol: str, current_price):
+        return [{"symbol": symbol, "name": symbol.upper(), "current_price": current_price}]
+
+    def _make_ohlcv(self, symbol: str, last_close: float):
+        ccxt_sym = symbol.upper() + "/USDT"
+        btc_df = pd.DataFrame({"close": [40000.0, 41000.0, 42000.0]})
+        alt_df = pd.DataFrame({"close": [last_close - 0.1, last_close - 0.05, last_close]})
+        return {"BTC/USDT": btc_df, ccxt_sym: alt_df}
+
+    def test_matching_price_kept(self) -> None:
+        """Coin with matching CG and OHLCV price is kept."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 1.0)
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+        assert len(filtered_coins) == 1
+
+    def test_divergent_price_dropped(self) -> None:
+        """Coin with >15% divergence is dropped from both coins and ohlcv."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 2.0)  # 100% divergence
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" not in filtered_ohlcv
+        assert len(filtered_coins) == 0
+
+    def test_boundary_14pct_kept(self) -> None:
+        """14% divergence is within 15% threshold — coin kept."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 0.86)  # 14% divergence
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+
+    def test_boundary_17pct_dropped(self) -> None:
+        """17% divergence exceeds 15% threshold — coin dropped."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = self._make_ohlcv("alpha", 0.83)  # 17% divergence
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" not in filtered_ohlcv
+
+    def test_none_price_kept(self) -> None:
+        """Coin with current_price=None is kept (fail-open)."""
+        coins = self._make_coins("alpha", None)
+        ohlcv = self._make_ohlcv("alpha", 999.0)
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+        assert len(filtered_coins) == 1
+
+    def test_empty_ohlcv_kept(self) -> None:
+        """Coin with empty OHLCV DataFrame is kept (fail-open)."""
+        coins = self._make_coins("alpha", 1.0)
+        ohlcv = {"BTC/USDT": pd.DataFrame({"close": [40000.0]}), "ALPHA/USDT": pd.DataFrame()}
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+
+    def test_zero_price_kept(self) -> None:
+        """Coin with current_price=0 is kept (fail-open)."""
+        coins = self._make_coins("alpha", 0)
+        ohlcv = self._make_ohlcv("alpha", 5.0)
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert "ALPHA/USDT" in filtered_ohlcv
+
+    def test_coins_list_also_filtered(self) -> None:
+        """When a symbol is dropped, the coins list is also filtered."""
+        coins = [
+            {"symbol": "alpha", "name": "Alpha", "current_price": 1.0},
+            {"symbol": "bravo", "name": "Bravo", "current_price": 5.0},
+        ]
+        btc_df = pd.DataFrame({"close": [40000.0, 41000.0]})
+        alpha_df = pd.DataFrame({"close": [1.0, 1.02]})  # close to CG
+        bravo_df = pd.DataFrame({"close": [50.0, 50.5]})  # 10x divergence
+        ohlcv = {"BTC/USDT": btc_df, "ALPHA/USDT": alpha_df, "BRAVO/USDT": bravo_df}
+        filtered_coins, filtered_ohlcv = price_sanity_filter(coins, ohlcv)
+        assert len(filtered_coins) == 1
+        assert filtered_coins[0]["symbol"] == "alpha"
+        assert "ALPHA/USDT" in filtered_ohlcv
+        assert "BRAVO/USDT" not in filtered_ohlcv
+        assert "BTC/USDT" in filtered_ohlcv  # BTC always preserved
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: New default and filter logging tests
+# ---------------------------------------------------------------------------
+
+
+class TestNewDefaults:
+    """Verify recalibrated threshold defaults."""
+
+    def test_new_defaults_pass_moderate_coins(self) -> None:
+        """Coin with beta=1.1, corr=0.65, amihud=5e-6 passes default filters."""
+        df = pd.DataFrame([{
+            "symbol": "MODERATE/USDT",
+            "name": "Moderate",
+            "market_cap": 50_000_000,
+            "volume_24h": 2_000_000,
+            "beta": 1.1,
+            "correlation": 0.65,
+            "trend_score": 0.05,
+            "amihud": 5e-6,
+            "circulating_pct": 0.80,
+            "data_days": 40,
+        }])
+        result = apply_filters(df)
+        assert "MODERATE/USDT" in result["symbol"].values
+
+    def test_explicit_old_thresholds_still_work(self) -> None:
+        """apply_filters(df, min_beta=1.5) still filters beta=1.2 coins."""
+        df = pd.DataFrame([{
+            "symbol": "LOWBETA/USDT",
+            "name": "LowBeta",
+            "market_cap": 50_000_000,
+            "volume_24h": 2_000_000,
+            "beta": 1.2,
+            "correlation": 0.85,
+            "trend_score": 0.10,
+            "amihud": 1e-8,
+            "circulating_pct": 0.80,
+            "data_days": 40,
+        }])
+        result = apply_filters(df, min_beta=1.5)
+        assert "LOWBETA/USDT" not in result["symbol"].values
+
+    def test_filter_drop_logging(self, caplog) -> None:
+        """Each filter step emits INFO log with counts."""
+        import logging
+        with caplog.at_level(logging.INFO, logger="quant_scanner.screener_engine"):
+            _filtered()
+        # Verify filter drop messages are logged
+        assert "Filter data_days>=20:" in caplog.text
+        assert "Filter beta>" in caplog.text
+        assert "Filter corr>" in caplog.text
+        assert "Filter vol>" in caplog.text
+        assert "Filter supply>" in caplog.text
+        assert "Filter amihud<=" in caplog.text
+
+    def test_exchange_id_case_insensitive(self) -> None:
+        """'KuCoin' is normalized to 'kucoin' in exchange ID parsing."""
+        # We test this via the exchange_ids parsing in run_screen,
+        # but we can verify the string split logic directly
+        exchange_id = "KuCoin, OKX, Gate"
+        exchange_ids = [x.strip().lower() for x in exchange_id.split(",")]
+        assert exchange_ids == ["kucoin", "okx", "gate"]
